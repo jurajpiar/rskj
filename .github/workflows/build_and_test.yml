@@ -163,6 +163,31 @@ jobs:
       run:
         working-directory: .
 
+    services:
+      bitcoind01:
+        image: kylemanna/bitcoind:latest
+        volumes:
+          - ${{ github.workspace }}/.github/mining-test/bitcoind01.conf:/etc/bitcoind/bitcoind.conf
+        env:
+          DISABLEWALLET: "0"
+        ports:
+          - 31591:31591
+        options: >-
+          --entrypoint "/usr/local/bin/bitcoind"
+          --conf "/etc/bitcoind/bitcoind.conf"
+      
+
+      bitcoind02:
+        image: kylemanna/bitcoind:latest
+        volumes:
+          - ${{ github.workspace }}/.github/mining-test/bitcoind02.conf:/etc/bitcoind/bitcoind.conf
+        env:
+          DISABLEWALLET: "0"
+        ports:
+          - 31592:31592
+        options: >-
+          --entrypoint "/usr/local/bin/bitcoind"
+          --conf "/etc/bitcoind/bitcoind.conf"
     steps:
       - uses: actions/checkout@v2
       - name: Setup System Tools
@@ -208,17 +233,23 @@ jobs:
 #          docker run -d --name bitcoind02 -p 31592:31592 --entrypoint "/usr/local/bin/bitcoind" kylemanna/bitcoind:latest -printtoconsole -regtest -debug -server -listen -port=31592 -connect=localhost:31591 -rpcbind=0.0.0.0:32592 -rpcallowip=0.0.0.0/0 -rpcuser=admin -rpcpassword=admin
 #
 #
-#      - name: Test bitcoin nodes
-#        run: |
-#          echo Test bitcoin node 1
-#          curl -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32591
-#          echo Test bitcoin node 2
-#          curl -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32592
-#
-#      - name: Generate BTC blocks
-#        working-directory: mining-integration-tests
-#        run: |
-#          node generateBtcBlocks.js
+
+      - name: Restart bitcoin nodes
+        uses: docker://docker
+        with:
+          args: docker restart bitcoind01 bitcoind02
+
+      - name: Test bitcoin nodes
+        run: |
+          echo Test bitcoin node 1
+          curl -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://bitcoind01:32591
+          echo Test bitcoin node 2
+          curl -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32592
+
+      - name: Generate BTC blocks
+        working-directory: mining-integration-tests
+        run: |
+          node generateBtcBlocks.js
 
       - name: Setup Java JDK
         uses: actions/setup-java@v2
@@ -263,15 +294,15 @@ jobs:
 #        run: |
 #
 
-      - name: Run Mining Integration Tests
-        run: |
-          chmod +x .github/mining-test/run.sh
-          ./.github/mining-test/run.sh
-
 #      - name: Run Mining Integration Tests
-#        working-directory: mining-integration-tests
 #        run: |
-#          npm test
+#          chmod +x .github/mining-test/run.sh
+#          ./.github/mining-test/run.sh
+
+      - name: Run Mining Integration Tests
+        working-directory: mining-integration-tests
+        run: |
+          npm test
 
       - name: Stop RSKj
         if: always()
