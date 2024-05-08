@@ -163,34 +163,6 @@ jobs:
       run:
         working-directory: .
 
-#    services:
-#      bitcoind01:
-#        image: kylemanna/bitcoind:latest
-#        volumes:
-#          - ${{ github.workspace }}/mining-test/bitcoind01:/bitcoin/.bitcoin/
-#        env:
-#          DISABLEWALLET: "0"
-#        ports:
-#          - 31591:31591
-#          - 32591:32591
-#        options: >-
-#          --entrypoint "/usr/local/bin/bitcoind"
-#          --name bitcoind01
-      
-#
-#      bitcoind02:
-#        image: kylemanna/bitcoind:latest
-#        volumes:
-#          - ${{ github.workspace }}/mining-test/bitcoind02:/bitcoin/.bitcoin/
-#        env:
-#          DISABLEWALLET: "0"
-#        ports:
-#          - 31592:31592
-#          - 32592:32592
-#        options: >-
-#          --entrypoint "/usr/local/bin/bitcoind"
-#          --name bitcoind02
-
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -198,123 +170,7 @@ jobs:
       - name: Setup System Tools
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y jq lsof docker-compose
-
-#      - name: Start bitcoind01 Container
-#        run: |
-#          docker run -d kylemanna/bitcoind:latest /
-#          --entrypoint "/usr/local/bin/bitcoind" /
-#          --name bitcoind01 /
-#          -p 31591:31591 -p 32591:32591 /
-#          -printtoconsole -regtest -debug -server -listen /
-#          -port=31591 /
-#          -connect=localhost:31592 /
-#          -rpcbind=0.0.0.0:32591 /
-#          -rpcallowip=0.0.0.0/0 /
-#          -rpcuser=admin /
-#          -rpcpassword=admin
-
-
-#      - name: Verify bitcoind01 and bitcoind02 are running
-#        uses: docker://docker
-#        with:
-#          args: |
-#            docker ps -all
-#
-#      - name: Verify all required ports are used by bitcoind01 and bitcoind02
-#        shell: bash
-#        run: |
-#          ports=(31591 32591 31592 32592)
-#          for port in "${ports[@]}"; do
-#          if ! lsof -i:$port -sTCP:LISTEN > /dev/null; then
-#            echo "Error: No process is listening on port $port"
-#              exit 1
-#            fi
-#          done
-#          echo "Success: All specified ports are being listened to."
-
-#      - name: bitcoind01 logs
-#        uses: docker://docker
-#        with:
-#          args: |
-#            docker logs bitcoind01
-
-#      - name: Move bitcoin conf
-#        run: |
-#          sudo cp -R rskj/mining-test/bitcoind01/* mining-test/bitcoind01
-
-#      - name: Restart bitcoin nodes
-#        uses: docker://docker
-#        with:
-#          args: docker restart bitcoind01 #bitcoind02
-
-#      - name: Attach bitcoind01 container to the network
-#        uses: docker://docker
-#        with:
-#          args: docker network connect bridge bitcoind01
-
-#      - name: Attach bitcoind02 container to the network
-#        uses: docker://docker
-#        with:
-#          args: docker network connect bridge bitcoind02
-
-#      - name: Check that bitcoind01 and bitcoind02 are attached to the network
-#        uses: docker://docker
-#        with:
-#          args: |
-#            docker network inspect bridge
-#
-#      - name: Verify bitcoind01 and bitcoind02 are running
-#        uses: docker://docker
-#        with:
-#          args: |
-#            docker ps -all
-
-#      - name: Print content of /bitcoin/.bitcoin/
-#        uses: docker://docker
-#        with:
-#          args: |
-#            docker exec bitcoind01 ls -la /bitcoin/.bitcoin
-#
-#      - name: Print content of /bitcoin/.bitcoin/
-#        run: |
-#          ls -la mining-test/bitcoind01
-#
-#      - name: Print content of /bitcoin/.bitcoin/bitcoin.conf
-#        uses: docker://docker
-#        with:
-#          args: |
-#            docker exec bitcoind01 cat /bitcoin/.bitcoin/bitcoind.conf
-
-#      - name: bitcoind01 logs
-#        uses: docker://docker
-#        with:
-#          args: |
-#            docker logs bitcoind01
-#
-#      - name: Wait for Bitcoin nodes to initialize
-#        run: sleep 30
-#
-#      - name: Verify all required ports are used by bitcoind01 and bitcoind02
-#        shell: bash
-#        run: |
-#          ports=(31591 32591 31592 32592)
-#          for port in "${ports[@]}"; do
-#          if ! lsof -i:$port -sTCP:LISTEN > /dev/null; then
-#            echo "Error: No process is listening on port $port"
-#              exit 1
-#            fi
-#          done
-#          echo "Success: All specified ports are being listened to."
-#
-#      - name: Test bitcoin nodes
-#        run: |
-#          echo Test bitcoin node 1
-#          sleep 15
-#          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32591
-##          echo Test bitcoin node 2
-##          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://locahost:32592
-#
+          sudo apt-get install -y jq lsof
 
       - name: Setup Node.js
         uses: actions/setup-node@v2
@@ -335,7 +191,7 @@ jobs:
         uses: docker://docker
         with:
           args: |
-            docker compose -f mining-integration-tests/docker-compose.yml ud -d 
+            docker compose --file mining-integration-tests/docker-compose.yml up -d 
 
       - name: Wait for Bitcoin nodes to initialize
         run: sleep 30
@@ -344,6 +200,8 @@ jobs:
         run: |
           echo Test bitcoin node 1
           curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32591
+          echo Test bitcoin node 2
+          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32592
 
 #      - uses: actions/cache@v2
 #        with:
@@ -353,26 +211,25 @@ jobs:
 #          restore-keys: |
 #            ${{ runner.os }}-node-
 
+      - name: "Modify test suite config"
+        run: |
+          ls -al mining-integration-tests
+          cat mining-integration-tests/config.json
+          echo "bitcoind url before"
+          jq -r '.bitcoind.url' "mining-integration-tests/config.json"
+          jq --arg new_url "localhost" '.bitcoind.url = $new_url' "mining-integration-tests/config.json" > temp.json && mv temp.json "mining-integration-tests/config.json"
+          echo "bitcoind url after"
+          jq -r '.bitcoind.url' "mining-integration-tests/config.json"
+
       - name: Install Mining Integration Tests dependencies
         working-directory: mining-integration-tests
         run: |
           npm install
-      #
-      #      - name: Start Bitcoin nodes
-      #        run: |
-      #          docker run -itd bitcoind01 /usr/local/bin/bitcoind -printtoconsole -regtest -debug -server -listen -port=31591 -connect=localhost:31592 -rpcbind=0.0.0.0:32591 -rpcallowip=0.0.0.0/0 -rpcuser=admin -rpcpassword=admin
-      #          docker run -itd bitcoind02 /usr/local/bin/bitcoind -printtoconsole -regtest -debug -server -listen -port=31592 -connect=localhost:31591 -rpcbind=0.0.0.0:32591 -rpcallowip=0.0.0.0/0 -rpcuser=admin -rpcpassword=admin
-#      - name: Start Bitcoin nodes
-#        run: |
-#          docker run -d --name bitcoind01 -p 31591:31591 --entrypoint "/usr/local/bin/bitcoind" kylemanna/bitcoind:latest -printtoconsole -regtest -debug -server -listen -port=31591 -connect=localhost:31592 -rpcbind=0.0.0.0:32591 -rpcallowip=0.0.0.0/0 -rpcuser=admin -rpcpassword=admin
-#          docker run -d --name bitcoind02 -p 31592:31592 --entrypoint "/usr/local/bin/bitcoind" kylemanna/bitcoind:latest -printtoconsole -regtest -debug -server -listen -port=31592 -connect=localhost:31591 -rpcbind=0.0.0.0:32592 -rpcallowip=0.0.0.0/0 -rpcuser=admin -rpcpassword=admin
-#
-#
 
       - name: Generate BTC blocks
         working-directory: mining-integration-tests
         run: |
-          node generateBtcBlocks.js
+          node --unhandled-rejections=strict generateBtcBlocks.js
 
       - name: Setup Java JDK
         uses: actions/setup-java@v2
@@ -413,9 +270,13 @@ jobs:
           ./gradlew --no-daemon --stacktrace build -x test
           ls -la ./gradle/wrapper/gradle-wrapper.jar
 
-#      - name: Start RSKj
-#        run: |
-#
+      - name: Start RSKj
+        run: |
+          version=$(tr -d "'\"" < rskj-core/src/main/resources/version.properties \
+            | cut -d = -f 2- | paste -sd - -)
+          ls -la rskj-core/build/libs/rskj-core-"$version"-all.jar
+          java -Drsk.conf.file=./rsk-integration-test.conf -cp rskj-core/build/libs/rskj-core-"$version"-all.jar co.rsk.Start --regtest
+
 
 #      - name: Run Mining Integration Tests
 #        run: |
@@ -426,6 +287,12 @@ jobs:
         working-directory: mining-integration-tests
         run: |
           npm test
+
+      - name: Review test results
+        working-directory: mining-integration-tests
+        if: always()
+        run: |
+           cat ./Results/mocha/Test-Results.xml
 
       - name: Stop and Remove Docker Containers
         uses: docker://docker
