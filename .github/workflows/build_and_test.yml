@@ -332,11 +332,10 @@ jobs:
           path: mining-integration-tests
 
       - name: Start bitcoin containers
-        working-directory: mining-integration-tests
         uses: docker://docker
         with:
           args: |
-            docker compose ud -d
+            docker compose -f mining-integration-tests/docker-compose.yml ud -d 
 
       - name: Wait for Bitcoin nodes to initialize
         run: sleep 30
