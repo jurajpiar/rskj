@@ -194,27 +194,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-        with:
-          path: rskj
 
       - name: Setup System Tools
         run: |
           sudo apt-get update -y
           sudo apt-get install -y jq lsof
 
-      - name: Start bitcoind01 Container
-        run: |
-          docker run -d kylemanna/bitcoind:latest /
-          --entrypoint "/usr/local/bin/bitcoind" /
-          --name bitcoind01 /
-          -p 31591:31591 -p 32591:32591 /
-          -printtoconsole -regtest -debug -server -listen /
-          -port=31591 /
-          -connect=localhost:31592 /
-          -rpcbind=0.0.0.0:32591 /
-          -rpcallowip=0.0.0.0/0 /
-          -rpcuser=admin /
-          -rpcpassword=admin
+#      - name: Start bitcoind01 Container
+#        run: |
+#          docker run -d kylemanna/bitcoind:latest /
+#          --entrypoint "/usr/local/bin/bitcoind" /
+#          --name bitcoind01 /
+#          -p 31591:31591 -p 32591:32591 /
+#          -printtoconsole -regtest -debug -server -listen /
+#          -port=31591 /
+#          -connect=localhost:31592 /
+#          -rpcbind=0.0.0.0:32591 /
+#          -rpcallowip=0.0.0.0/0 /
+#          -rpcuser=admin /
+#          -rpcpassword=admin
 
 
 #      - name: Verify bitcoind01 and bitcoind02 are running
@@ -308,15 +306,15 @@ jobs:
 #            fi
 #          done
 #          echo "Success: All specified ports are being listened to."
-
-      - name: Test bitcoin nodes
-        run: |
-          echo Test bitcoin node 1
-          sleep 15
-          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32591
-#          echo Test bitcoin node 2
-#          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://locahost:32592
-      
+#
+#      - name: Test bitcoin nodes
+#        run: |
+#          echo Test bitcoin node 1
+#          sleep 15
+#          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32591
+##          echo Test bitcoin node 2
+##          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://locahost:32592
+#
 
       - name: Setup Node.js
         uses: actions/setup-node@v2
@@ -332,6 +330,21 @@ jobs:
 #          ref: ${{ secrets.MINING_INTEGRATION_TESTS_REF }}
 #          token: ${{ secrets.GITHUB_TOKEN }}
           path: mining-integration-tests
+
+      - name: Start bitcoin containers
+        working-directory: mining-integration-tests
+        uses: docker://docker
+        with:
+          args: |
+            docker compose ud -d
+
+      - name: Wait for Bitcoin nodes to initialize
+        run: sleep 30
+
+      - name: Test bitcoin nodes
+        run: |
+          echo Test bitcoin node 1
+          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32591
 
 #      - uses: actions/cache@v2
 #        with:
