@@ -198,7 +198,7 @@ jobs:
       - name: Setup System Tools
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y jq lsof
+          sudo apt-get install -y jq lsof docker-compose
 
 #      - name: Start bitcoind01 Container
 #        run: |
