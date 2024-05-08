@@ -157,31 +157,31 @@ jobs:
   mining-tests:
 #    needs: build
     runs-on: ubuntu-latest
-    container:
-      image: openjdk:8-jdk
+#    container:
+#      image: openjdk:8-jdk
     defaults:
       run:
         working-directory: .
 
-    services:
-      bitcoind01:
-        image: kylemanna/bitcoind:latest
-        volumes:
-          - ${{ github.workspace }}/.github/mining-test/bitcoind01:/bitcoin/.bitcoin/
-        env:
-          DISABLEWALLET: "0"
-        ports:
-          - 31591:31591
+#    services:
+#      bitcoind01:
+#        image: kylemanna/bitcoind:latest
+#        volumes:
+#          - ${{ github.workspace }}/mining-test/bitcoind01:/bitcoin/.bitcoin/
+#        env:
+#          DISABLEWALLET: "0"
+#        ports:
+#          - 31591:31591
 #          - 32591:32591
-        options: >-
-          --entrypoint "/usr/local/bin/bitcoind"
-          --name bitcoind01
+#        options: >-
+#          --entrypoint "/usr/local/bin/bitcoind"
+#          --name bitcoind01
       
 #
 #      bitcoind02:
 #        image: kylemanna/bitcoind:latest
 #        volumes:
-#          - ${{ github.workspace }}/.github/mining-test/bitcoind02:/bitcoin/.bitcoin/
+#          - ${{ github.workspace }}/mining-test/bitcoind02:/bitcoin/.bitcoin/
 #        env:
 #          DISABLEWALLET: "0"
 #        ports:
@@ -192,12 +192,30 @@ jobs:
 #          --name bitcoind02
 
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          path: rskj
 
       - name: Setup System Tools
         run: |
-          apt-get update -y
-          apt-get install -y jq lsof
+          sudo apt-get update -y
+          sudo apt-get install -y jq lsof
+
+      - name: Start bitcoind01 Container
+        run: |
+          docker run -d kylemanna/bitcoind:latest /
+          --entrypoint "/usr/local/bin/bitcoind" /
+          --name bitcoind01 /
+          -p 31591:31591 -p 32591:32591 /
+          -printtoconsole -regtest -debug -server -listen /
+          -port=31591 /
+          -connect=localhost:31592 /
+          -rpcbind=0.0.0.0:32591 /
+          -rpcallowip=0.0.0.0/0 /
+          -rpcuser=admin /
+          -rpcpassword=admin
+
 
 #      - name: Verify bitcoind01 and bitcoind02 are running
 #        uses: docker://docker
@@ -217,82 +235,87 @@ jobs:
 #          done
 #          echo "Success: All specified ports are being listened to."
 
-      - name: bitcoind01 logs
-        uses: docker://docker
-        with:
-          args: |
-            docker logs bitcoind01
+#      - name: bitcoind01 logs
+#        uses: docker://docker
+#        with:
+#          args: |
+#            docker logs bitcoind01
 
-      - name: Restart bitcoin nodes
-        uses: docker://docker
-        with:
-          args: docker restart bitcoind01 #bitcoind02
+#      - name: Move bitcoin conf
+#        run: |
+#          sudo cp -R rskj/mining-test/bitcoind01/* mining-test/bitcoind01
 
-      - name: Attach bitcoind01 container to the network
-        uses: docker://docker
-        with:
-          args: docker network connect bridge bitcoind01
+#      - name: Restart bitcoin nodes
+#        uses: docker://docker
+#        with:
+#          args: docker restart bitcoind01 #bitcoind02
+
+#      - name: Attach bitcoind01 container to the network
+#        uses: docker://docker
+#        with:
+#          args: docker network connect bridge bitcoind01
 
 #      - name: Attach bitcoind02 container to the network
 #        uses: docker://docker
 #        with:
 #          args: docker network connect bridge bitcoind02
 
-      - name: Check that bitcoind01 and bitcoind02 are attached to the network
-        uses: docker://docker
-        with:
-          args: |
-            docker network inspect bridge
+#      - name: Check that bitcoind01 and bitcoind02 are attached to the network
+#        uses: docker://docker
+#        with:
+#          args: |
+#            docker network inspect bridge
+#
+#      - name: Verify bitcoind01 and bitcoind02 are running
+#        uses: docker://docker
+#        with:
+#          args: |
+#            docker ps -all
 
-      - name: Verify bitcoind01 and bitcoind02 are running
-        uses: docker://docker
-        with:
-          args: |
-            docker ps -all
+#      - name: Print content of /bitcoin/.bitcoin/
+#        uses: docker://docker
+#        with:
+#          args: |
+#            docker exec bitcoind01 ls -la /bitcoin/.bitcoin
+#
+#      - name: Print content of /bitcoin/.bitcoin/
+#        run: |
+#          ls -la mining-test/bitcoind01
+#
+#      - name: Print content of /bitcoin/.bitcoin/bitcoin.conf
+#        uses: docker://docker
+#        with:
+#          args: |
+#            docker exec bitcoind01 cat /bitcoin/.bitcoin/bitcoind.conf
 
-      - name: Print content of /bitcoin/.bitcoin/
-        uses: docker://docker
-        with:
-          args: |
-            docker exec bitcoind01 ls -la /bitcoin/.bitcoin
-
-      - name: Print content of /bitcoin/.bitcoin/
-        run: |
-          ls -la .github/mining-test/bitcoind01
-
-      - name: Print content of /bitcoin/.bitcoin/bitcoin.conf
-        uses: docker://docker
-        with:
-          args: |
-            docker exec bitcoind01 cat /bitcoin/.bitcoin/bitcoind.conf 
-
-      - name: bitcoind01 logs
-        uses: docker://docker
-        with:
-          args: |
-            docker logs bitcoind01
-
-      - name: Wait for Bitcoin nodes to initialize
-        run: sleep 30
-
-      - name: Verify all required ports are used by bitcoind01 and bitcoind02
-        shell: bash
-        run: |
-          ports=(31591 32591 31592 32592)
-          for port in "${ports[@]}"; do
-          if ! lsof -i:$port -sTCP:LISTEN > /dev/null; then
-            echo "Error: No process is listening on port $port"
-              exit 1
-            fi
-          done
-          echo "Success: All specified ports are being listened to."
+#      - name: bitcoind01 logs
+#        uses: docker://docker
+#        with:
+#          args: |
+#            docker logs bitcoind01
+#
+#      - name: Wait for Bitcoin nodes to initialize
+#        run: sleep 30
+#
+#      - name: Verify all required ports are used by bitcoind01 and bitcoind02
+#        shell: bash
+#        run: |
+#          ports=(31591 32591 31592 32592)
+#          for port in "${ports[@]}"; do
+#          if ! lsof -i:$port -sTCP:LISTEN > /dev/null; then
+#            echo "Error: No process is listening on port $port"
+#              exit 1
+#            fi
+#          done
+#          echo "Success: All specified ports are being listened to."
 
       - name: Test bitcoin nodes
         run: |
           echo Test bitcoin node 1
-          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://bitcoind01:32591
-          echo Test bitcoin node 2
-          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://bitcoind02:32592
+          sleep 15
+          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32591
+#          echo Test bitcoin node 2
+#          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://locahost:32592
       
 
       - name: Setup Node.js
@@ -384,8 +407,8 @@ jobs:
 
 #      - name: Run Mining Integration Tests
 #        run: |
-#          chmod +x .github/mining-test/run.sh
-#          ./.github/mining-test/run.sh
+#          chmod +x mining-test/run.sh
+#          ./mining-test/run.sh
 
       - name: Run Mining Integration Tests
         working-directory: mining-integration-tests
