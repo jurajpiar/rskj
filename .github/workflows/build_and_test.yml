@@ -167,41 +167,75 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
-      - name: Setup System Tools
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y jq lsof
+#      - name: Setup System Tools
+#        run: |
+#          sudo apt-get update -y
+#          sudo apt-get install -y jq lsof
 
       - name: Setup Node.js
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v4
         with:
-          node-version: '12'
+          node-version: '21.x'
       - name: Check Node.js version
         run: node --version
 
       - name: Checkout Mining Integration Tests Repository
         uses: actions/checkout@v2
         with:
-          repository: rsksmart/mining-integration-tests
+          repository: jurajpiar/mining-integration-tests
 #          ref: ${{ secrets.MINING_INTEGRATION_TESTS_REF }}
 #          token: ${{ secrets.GITHUB_TOKEN }}
           path: mining-integration-tests
 
       - name: Start bitcoin containers
+        run: |
+            sudo docker compose --file mining-integration-tests/docker-compose.yml up -d 
+
+      - name: Wait for Bitcoin nodes to initialize
+        run: |
+          while ! curl -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32591; do
+            echo "Waiting for bitcoind1 to start..."
+            sleep 5
+          done
+
+      - name: Check bitcoin nodes
         uses: docker://docker
         with:
           args: |
-            docker compose --file mining-integration-tests/docker-compose.yml up -d 
+            docker ps -a
+      - name: Check bitcoind1 logs
+        uses: docker://docker
+        with:
+          args: |
+            docker logs bitcoind1
+      - name: Check bitcoind2 logs
+        uses: docker://docker
+        with:
+          args: |
+            docker logs bitcoind2
 
-      - name: Wait for Bitcoin nodes to initialize
-        run: sleep 30
-
-      - name: Test bitcoin nodes
+      - name:  Test bitcoin node 1 as localhost
+        if: always()
         run: |
           echo Test bitcoin node 1
           curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32591
+      - name: Test bitcoin nodes as bitcoind1
+        if: always()
+        run: |
+          echo Test bitcoin node 1
+          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://bitcoind1:32591
+
+      - name:  Test bitcoin node 2 as localhost
+        if: always()
+        run: |
           echo Test bitcoin node 2
           curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32592
+
+      - name: Test bitcoin nodes as bitcoind2
+        if: always()
+        run: |
+          echo Test bitcoin node 2
+          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://bitcoind2:32592
 
 #      - uses: actions/cache@v2
 #        with:
@@ -232,7 +266,7 @@ jobs:
           node --unhandled-rejections=strict generateBtcBlocks.js
 
       - name: Setup Java JDK
-        uses: actions/setup-java@v2
+        uses: actions/setup-java@v3
         with:
           java-version: '17'
           distribution: 'temurin'
@@ -299,5 +333,5 @@ jobs:
         if: always()
         with:
           args: |
-            docker stop bitcoind01 bitcoind02
-            docker rm bitcoind01 bitcoind02
+            docker stop bitcoind1 bitcoind2
+            docker rm bitcoind1 bitcoind2
