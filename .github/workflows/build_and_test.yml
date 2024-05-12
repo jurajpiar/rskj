@@ -154,7 +154,32 @@ jobs:
 #          find rskj-core/build/test-results -type f -name "*.xml" -exec cp {} ~/junit/ \;
 #        if: always()
 
+  build-push-docker-images:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the mining integration tests repository
+        uses: actions/checkout@v4
+        with:
+          repository: jurajpiar/mining-integration-tests
+#          ref: ${{ secrets.MINING_INTEGRATION_TESTS_REF }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker images
+        run: |
+          docker build -t jurajpiar/bitcoind1:latest -f bitcoind1.Dockerfile .
+          docker push jurajpiar/bitcoind1:latest
+          docker build -t jurajpiar/bitcoind2:latest -f bitcoind2.Dockerfile .
+            docker push jurajpiar/bitcoind2:latest
+
+
   mining-tests:
+    needs: build-push-docker-images
     runs-on: ubuntu-latest
     defaults:
         run:
@@ -162,14 +187,14 @@ jobs:
 
     services:
         bitcoind1:
-            image: kylemanna/bitcoind:latest
+            image: jurajpiar/bitcoind1:latest
             ports:
             - 8331:8331
             - 31591:31591
             - 32591:32591
             options: --name bitcoind1
         bitcoind2:
-            image: kylemanna/bitcoind:latest
+            image: jurajpiar/bitcoind2:latest
             ports:
             - 8332:8332
             - 31592:31592
@@ -177,34 +202,40 @@ jobs:
             options: --name bitcoind2
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup System Tools
+      - name: Check containers
         run: |
-          sudo apt update -y
-          sudo apt install -y curl jq lsof
+          docker ps -a
 
-      - name: Stop and remove existing containers
+      - name: Connect to bitcoind1 as localhost
         run: |
-            sudo docker compose --file mining-test/docker-compose.yml down
+          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32591 || exit 0
 
-      - name: Start bitcoin containers
+      - name: Connect to bitcoind1 as bitcoind1
         run: |
-            sudo docker compose --file mining-test/docker-compose.yml up -d
+          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://bitcoind1:32591
 
-      - name: Wait for Bitcoin nodes to initialize
-        run: |
-          counter=0
-          while ! curl -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32591; do
-            echo "Waiting for bitcoind1 to start..."
-            counter=$((counter+1))
-            if [ $counter -gt 20 ]; then
-              echo "Failed to start bitcoind1"
-              exit 1
-            fi
-            sleep 6
-          done
+#
+
+#      - name: Checkout
+#        uses: actions/checkout@v4
+#
+#      - name: Setup System Tools
+#        run: |
+#          sudo apt update -y
+#          sudo apt install -y curl jq lsof
+#
+#      - name: Wait for Bitcoin nodes to initialize
+#        run: |
+#          counter=0
+#          while ! lsof -i:32591; do
+#            echo "Waiting for bitcoind1 to start..."
+#            sleep 5
+#            counter=$((counter+1))
+#            if [ $counter -gt 10 ]; then
+#              echo "bitcoind1 failed to start"
+#              exit 1
+#            fi
+#          done
 
 #  mining-tests:
 ##    needs: build
