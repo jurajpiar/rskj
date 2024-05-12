@@ -155,183 +155,235 @@ jobs:
 #        if: always()
 
   mining-tests:
-#    needs: build
     runs-on: ubuntu-latest
-#    container:
-#      image: openjdk:8-jdk
     defaults:
-      run:
-        working-directory: .
+        run:
+            working-directory: .
+
+    services:
+        bitcoind1:
+            image: kylemanna/bitcoind:latest
+            ports:
+            - 8331:8331
+            - 31591:31591
+            - 32591:32591
+            options: --name bitcoind1
+        bitcoind2:
+            image: kylemanna/bitcoind:latest
+            ports:
+            - 8332:8332
+            - 31592:31592
+            - 32592:32592
+            options: --name bitcoind2
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
-#      - name: Setup System Tools
-#        run: |
-#          sudo apt-get update -y
-#          sudo apt-get install -y jq lsof
+      - name: Setup System Tools
+        run: |
+          sudo apt update -y
+          sudo apt install -y curl jq lsof
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '21.x'
-      - name: Check Node.js version
-        run: node --version
-
-      - name: Checkout Mining Integration Tests Repository
-        uses: actions/checkout@v2
-        with:
-          repository: jurajpiar/mining-integration-tests
-#          ref: ${{ secrets.MINING_INTEGRATION_TESTS_REF }}
-#          token: ${{ secrets.GITHUB_TOKEN }}
-          path: mining-integration-tests
+      - name: Stop and remove existing containers
+        run: |
+            sudo docker compose --file mining-test/docker-compose.yml down
 
       - name: Start bitcoin containers
         run: |
-            sudo docker compose --file mining-integration-tests/docker-compose.yml up -d 
+            sudo docker compose --file mining-test/docker-compose.yml up -d
 
       - name: Wait for Bitcoin nodes to initialize
         run: |
+          counter=0
           while ! curl -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32591; do
             echo "Waiting for bitcoind1 to start..."
-            sleep 5
+            counter=$((counter+1))
+            if [ $counter -gt 20 ]; then
+              echo "Failed to start bitcoind1"
+              exit 1
+            fi
+            sleep 6
           done
 
-      - name: Check bitcoin nodes
-        uses: docker://docker
-        with:
-          args: |
-            docker ps -a
-      - name: Check bitcoind1 logs
-        uses: docker://docker
-        with:
-          args: |
-            docker logs bitcoind1
-      - name: Check bitcoind2 logs
-        uses: docker://docker
-        with:
-          args: |
-            docker logs bitcoind2
-
-      - name:  Test bitcoin node 1 as localhost
-        if: always()
-        run: |
-          echo Test bitcoin node 1
-          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32591
-      - name: Test bitcoin nodes as bitcoind1
-        if: always()
-        run: |
-          echo Test bitcoin node 1
-          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://bitcoind1:32591
-
-      - name:  Test bitcoin node 2 as localhost
-        if: always()
-        run: |
-          echo Test bitcoin node 2
-          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32592
-
-      - name: Test bitcoin nodes as bitcoind2
-        if: always()
-        run: |
-          echo Test bitcoin node 2
-          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://bitcoind2:32592
-
-#      - uses: actions/cache@v2
-#        with:
-#          path: |
-#            node_modules
-#          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
-#          restore-keys: |
-#            ${{ runner.os }}-node-
-
-      - name: "Modify test suite config"
-        run: |
-          ls -al mining-integration-tests
-          cat mining-integration-tests/config.json
-          echo "bitcoind url before"
-          jq -r '.bitcoind.url' "mining-integration-tests/config.json"
-          jq --arg new_url "localhost" '.bitcoind.url = $new_url' "mining-integration-tests/config.json" > temp.json && mv temp.json "mining-integration-tests/config.json"
-          echo "bitcoind url after"
-          jq -r '.bitcoind.url' "mining-integration-tests/config.json"
-
-      - name: Install Mining Integration Tests dependencies
-        working-directory: mining-integration-tests
-        run: |
-          npm install
-
-      - name: Generate BTC blocks
-        working-directory: mining-integration-tests
-        run: |
-          node --unhandled-rejections=strict generateBtcBlocks.js
-
-      - name: Setup Java JDK
-        uses: actions/setup-java@v3
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Verify Java installation
-        run: java -version
-
-#      - uses: actions/cache@v4
-#        name: Restore gradle cache
-#        with:
-#          path: |
-#            .gradle/caches
-#            gradle/wrapper
-#          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-#          restore-keys: |
-#            ${{ runner.os }}-gradle-
+#  mining-tests:
+##    needs: build
+#    runs-on: ubuntu-latest
+##    container:
+##      image: openjdk:8-jdk
+#    defaults:
+#      run:
+#        working-directory: .
 #
-      - name: Get Gradle jar
-        run: |
-          ./configure.sh
-
-#      - uses: actions/cache@v4
-#        name: Restore build
+#    steps:
+#      - name: Checkout
+#        uses: actions/checkout@v2
+#
+##      - name: Setup System Tools
+##        run: |
+##          sudo apt-get update -y
+##          sudo apt-get install -y jq lsof
+#
+#      - name: Setup Node.js
+#        uses: actions/setup-node@v4
 #        with:
-#          path: |
-#            rsk-core/build
-#          key: ${{ runner.os }}-build-${{ hashFiles('build') }}
-#          restore-keys: |
-#            ${{ runner.os }}-build-
-
-      - name: Build
-        run: |
-          ./configure.sh
-          ./gradlew --no-daemon dependencies
-          ./gradlew --no-daemon --stacktrace build -x test
-          ls -la ./gradle/wrapper/gradle-wrapper.jar
-
-      - name: Start RSKj
-        run: |
-          version=$(tr -d "'\"" < rskj-core/src/main/resources/version.properties \
-            | cut -d = -f 2- | paste -sd - -)
-          ls -la rskj-core/build/libs/rskj-core-"$version"-all.jar
-          java -Drsk.conf.file=./rsk-integration-test.conf -cp rskj-core/build/libs/rskj-core-"$version"-all.jar co.rsk.Start --regtest
-
-
-#      - name: Run Mining Integration Tests
+#          node-version: '21.x'
+#      - name: Check Node.js version
+#        run: node --version
+#
+#      - name: Checkout Mining Integration Tests Repository
+#        uses: actions/checkout@v2
+#        with:
+#          repository: jurajpiar/mining-integration-tests
+##          ref: ${{ secrets.MINING_INTEGRATION_TESTS_REF }}
+##          token: ${{ secrets.GITHUB_TOKEN }}
+#          path: mining-integration-tests
+#
+#      - name: Start bitcoin containers
 #        run: |
-#          chmod +x mining-test/run.sh
-#          ./mining-test/run.sh
-
-      - name: Run Mining Integration Tests
-        working-directory: mining-integration-tests
-        run: |
-          npm test
-
-      - name: Review test results
-        working-directory: mining-integration-tests
-        if: always()
-        run: |
-           cat ./Results/mocha/Test-Results.xml
-
-      - name: Stop and Remove Docker Containers
-        uses: docker://docker
-        if: always()
-        with:
-          args: |
-            docker stop bitcoind1 bitcoind2
-            docker rm bitcoind1 bitcoind2
+#            sudo docker compose --file mining-integration-tests/docker-compose.yml up -d
+#
+#      - name: Wait for Bitcoin nodes to initialize
+#        run: |
+#          while ! curl -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32591; do
+#            echo "Waiting for bitcoind1 to start..."
+#            sleep 5
+#          done
+#
+#      - name: Check bitcoin nodes
+#        uses: docker://docker
+#        with:
+#          args: |
+#            docker ps -a
+#      - name: Check bitcoind1 logs
+#        uses: docker://docker
+#        with:
+#          args: |
+#            docker logs bitcoind1
+#      - name: Check bitcoind2 logs
+#        uses: docker://docker
+#        with:
+#          args: |
+#            docker logs bitcoind2
+#
+#      - name:  Test bitcoin node 1 as localhost
+#        if: always()
+#        run: |
+#          echo Test bitcoin node 1
+#          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32591
+#      - name: Test bitcoin nodes as bitcoind1
+#        if: always()
+#        run: |
+#          echo Test bitcoin node 1
+#          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://bitcoind1:32591
+#
+#      - name:  Test bitcoin node 2 as localhost
+#        if: always()
+#        run: |
+#          echo Test bitcoin node 2
+#          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://localhost:32592
+#
+#      - name: Test bitcoin nodes as bitcoind2
+#        if: always()
+#        run: |
+#          echo Test bitcoin node 2
+#          curl -v -s -u admin:admin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"getblockchaininfo","params":[]}' -H 'content-type:text/plain;' http://bitcoind2:32592
+#
+##      - uses: actions/cache@v2
+##        with:
+##          path: |
+##            node_modules
+##          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+##          restore-keys: |
+##            ${{ runner.os }}-node-
+#
+#      - name: "Modify test suite config"
+#        run: |
+#          ls -al mining-integration-tests
+#          cat mining-integration-tests/config.json
+#          echo "bitcoind url before"
+#          jq -r '.bitcoind.url' "mining-integration-tests/config.json"
+#          jq --arg new_url "localhost" '.bitcoind.url = $new_url' "mining-integration-tests/config.json" > temp.json && mv temp.json "mining-integration-tests/config.json"
+#          echo "bitcoind url after"
+#          jq -r '.bitcoind.url' "mining-integration-tests/config.json"
+#
+#      - name: Install Mining Integration Tests dependencies
+#        working-directory: mining-integration-tests
+#        run: |
+#          npm install
+#
+#      - name: Generate BTC blocks
+#        working-directory: mining-integration-tests
+#        run: |
+#          node --unhandled-rejections=strict generateBtcBlocks.js
+#
+#      - name: Setup Java JDK
+#        uses: actions/setup-java@v3
+#        with:
+#          java-version: '17'
+#          distribution: 'temurin'
+#
+#      - name: Verify Java installation
+#        run: java -version
+#
+##      - uses: actions/cache@v4
+##        name: Restore gradle cache
+##        with:
+##          path: |
+##            .gradle/caches
+##            gradle/wrapper
+##          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+##          restore-keys: |
+##            ${{ runner.os }}-gradle-
+##
+#      - name: Get Gradle jar
+#        run: |
+#          ./configure.sh
+#
+##      - uses: actions/cache@v4
+##        name: Restore build
+##        with:
+##          path: |
+##            rsk-core/build
+##          key: ${{ runner.os }}-build-${{ hashFiles('build') }}
+##          restore-keys: |
+##            ${{ runner.os }}-build-
+#
+#      - name: Build
+#        run: |
+#          ./configure.sh
+#          ./gradlew --no-daemon dependencies
+#          ./gradlew --no-daemon --stacktrace build -x test
+#          ls -la ./gradle/wrapper/gradle-wrapper.jar
+#
+#      - name: Start RSKj
+#        run: |
+#          version=$(tr -d "'\"" < rskj-core/src/main/resources/version.properties \
+#            | cut -d = -f 2- | paste -sd - -)
+#          ls -la rskj-core/build/libs/rskj-core-"$version"-all.jar
+#          java -Drsk.conf.file=./rsk-integration-test.conf -cp rskj-core/build/libs/rskj-core-"$version"-all.jar co.rsk.Start --regtest
+#
+#
+##      - name: Run Mining Integration Tests
+##        run: |
+##          chmod +x mining-test/run.sh
+##          ./mining-test/run.sh
+#
+#      - name: Run Mining Integration Tests
+#        working-directory: mining-integration-tests
+#        run: |
+#          npm test
+#
+#      - name: Review test results
+#        working-directory: mining-integration-tests
+#        if: always()
+#        run: |
+#           cat ./Results/mocha/Test-Results.xml
+#
+#      - name: Stop and Remove Docker Containers
+#        uses: docker://docker
+#        if: always()
+#        with:
+#          args: |
+#            docker stop bitcoind1 bitcoind2
+#            docker rm bitcoind1 bitcoind2

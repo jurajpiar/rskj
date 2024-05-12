@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  bitcoind1:
+    image: 'kylemanna/bitcoind:latest'
+    entrypoint: 'bitcoind'
+    container_name: 'bitcoind1'
+    ports:
+      - '8331:8331'
+      - '31591:31591'
+      - '32591:32591'
+    command:
+      -printtoconsole
+      -server
+      -listen
+      -port=31591
+      -rpcport=32591
+      -rpcallowip=::/0
+      -rpcuser=admin
+      -rpcpassword=admin
+      -regtest
+      -debug
+      -connect=bitcoind2:31592
+      -zmqpubhashblock=tcp://*:8331
+      -zmqpubhashtx=tcp://*:8331
+
+  bitcoind2:
+    image: 'kylemanna/bitcoind:latest'
+    entrypoint: 'bitcoind'
+    container_name: 'bitcoind2'
+    ports:
+      - '8332:8332'
+      - '31592:31592'
+      - '32592:32592'
+    command:
+      -printtoconsole
+      -server
+      -listen
+      -port=31592
+      -rpcport=32592
+      -rpcuser=admin
+      -rpcpassword=admin
+      -rpcallowip=::/0
+      -regtest
+      -debug
+      -connect=bitcoind1:31591
+      -zmqpubhashblock=tcp://*:8332
+      -zmqpubhashtx=tcp://*:8332
