@@ -244,12 +244,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '21.x'
+          node-version: '12.x'
       - name: Check Node.js version
         run: node --version
 
       - name: Checkout Mining Integration Tests Repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           repository: jurajpiar/mining-integration-tests
 #          ref: ${{ secrets.MINING_INTEGRATION_TESTS_REF }}
@@ -267,7 +267,7 @@ jobs:
       - name: Install Mining Integration Tests dependencies
         working-directory: mining-integration-tests
         run: |
-          npm install
+          npm ci
 
       - name: Generate BTC blocks
         working-directory: mining-integration-tests
