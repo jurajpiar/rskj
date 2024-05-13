@@ -181,9 +181,9 @@ jobs:
   mining-tests:
     needs: build-push-docker-images
     runs-on: ubuntu-latest
-    defaults:
-        run:
-            working-directory: .
+#    defaults:
+#        run:
+#            working-directory: .
 
     services:
         bitcoind1:
@@ -231,15 +231,10 @@ jobs:
 #    defaults:
 #      run:
 #        working-directory: .
-#
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-#      - name: Setup System Tools
-#        run: |
-#          sudo apt-get update -y
-#          sudo apt-get install -y jq lsof
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -313,34 +308,23 @@ jobs:
           ./gradlew --no-daemon --stacktrace build -x test
           ls -la ./gradle/wrapper/gradle-wrapper.jar
 
-      - name: Start RSKj
-        run: |
-          version=$(tr -d "'\"" < rskj-core/src/main/resources/version.properties \
-            | cut -d = -f 2- | paste -sd - -)
-          ls -la rskj-core/build/libs/rskj-core-"$version"-all.jar
-          java -Drsk.conf.file=./rsk-integration-test.conf -cp rskj-core/build/libs/rskj-core-"$version"-all.jar co.rsk.Start --regtest
-
-
-#      - name: Run Mining Integration Tests
-#        run: |
-#          chmod +x mining-test/run.sh
-#          ./mining-test/run.sh
-
-      - name: Run Mining Integration Tests
+      - name: Start RSKj and Run Tests
         working-directory: mining-integration-tests
         run: |
-          npm test
+          version=$(tr -d "'\"" < ../rskj-core/src/main/resources/version.properties \
+            | cut -d = -f 2- | paste -sd - -)
+          ls -la ../rskj-core/build/libs/rskj-core-"$version"-all.jar
+          java -Drsk.conf.file=./rsk-integration-test.conf -cp ../rskj-core/build/libs/rskj-core-"$version"-all.jar co.rsk.Start --regtest & rskpid=$!
+          until nc -z 127.0.0.1 4444
+            do
+              echo "Waiting for RskJ..."
+              sleep 1
+            done
+            npm test
+            kill $rskpid
 
       - name: Review test results
         working-directory: mining-integration-tests
         if: always()
         run: |
            cat ./Results/mocha/Test-Results.xml
-
-#      - name: Stop and Remove Docker Containers
-#        uses: docker://docker
-#        if: always()
-#        with:
-#          args: |
-#            docker stop bitcoind1 bitcoind2
-#            docker rm bitcoind1 bitcoind2
