@@ -138,7 +138,7 @@ jobs:
       - name: Integration tests
         run: |
           chmod +x ./gradlew
-          ./gradlew --no-daemon --stacktrace test
+          ./gradlew --no-daemon --stacktrace integrationTest
 
       - name: Save test results
         run: |
@@ -241,9 +241,9 @@ jobs:
 
       - name: Build
         run: |
+          ls -al rskj-core/build
+          ls -al ./gradle/wrapper/gradle-wrapper.jar
           ./configure.sh
-          ./gradlew --no-daemon dependencies
-          ./gradlew --no-daemon --stacktrace build -x test
 
       - name: Start RSKj and Run Tests
         working-directory: mining-integration-tests
