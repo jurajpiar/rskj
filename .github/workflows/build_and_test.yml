@@ -10,149 +10,141 @@ on:
       - '**'
 
 jobs:
-#  build:
-#    runs-on: ubuntu-latest
-#    container:
-#      image: openjdk:8-jdk
-#    env:
-#      _JAVA_OPTIONS: "-Xmx3G -Xms2G"
-#    defaults:
-#      run:
-#        working-directory: .
-#    steps:
-#      - uses: actions/checkout@v2
-#      - name: Setup System Tools
-#        run: |
-#          apt update -y
-#          apt install -y gnupg2 curl
-#      - name: Install Node.js
-#        run: |
-#          curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
-#          apt-get install -y nodejs
-#      - name: Check Node.js version
-#        run: node --version
-#      - name: Verify files
-#        run: |
-#          curl -sSL https://secchannel.rsk.co/SUPPORT.asc | gpg2 --import -
-#          gpg2 --verify SHA256SUMS.asc && sha256sum --check SHA256SUMS.asc
-#
-#      - uses: actions/cache@v4
-#        name: Cache Gradle
-#        with:
-#          path: |
-#            .gradle/caches
-#            gradle/wrapper
-#          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-#          restore-keys: |
-#            ${{ runner.os }}-gradle-
-#
-#      - uses: actions/cache@v4
-#        name: Cache build
-#        with:
-#          path: |
-#            build
-#          key: ${{ runner.os }}-build-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-#          restore-keys: |
-#            ${{ runner.os }}-build-
-#
-#      - name: Build
-#        run: |
-#          ./configure.sh
-#          ./gradlew --no-daemon dependencies
-#          ./gradlew --no-daemon --stacktrace build -x test
-#          ls -la ./gradle/wrapper/gradle-wrapper.jar
-#
-#  sonarqube:
-#    needs: build
-#    runs-on: ubuntu-latest
-#    container:
-#      image: eclipse-temurin:17-jdk
-#    defaults:
-#        run:
-#            working-directory: .
-#    steps:
-#      - uses: actions/checkout@v2
-#      - name: Run SonarQube analysis
-#        run: |
-#          echo "Installing git"
-#          apt-get update && apt-get install -yqq git
-#          extra_flags=""
-#          echo "Get GH event type"
-#          event_name="${{ github.event_name }}"
-#          if [ "$event_name" = "pull_request" ]; then
-#            echo "Setting up PR analysis"
-#            echo "switch to master"
-#            git branch -f master origin/master
-#            pr_number=${{ github.event.pull_request.number }}
-#            echo "PR number: $pr_number"
-#            extra_flags="-Dsonar.pullrequest.base=master -Dsonar.pullrequest.branch=${{ github.head_ref }} -Dsonar.pullrequest.key=$pr_number"
-#            echo "PR analysis flags: $extra_flags"
-#          else
-#            echo "Setting up branch analysis"
-#            extra_flags="-Dsonar.branch.name=master"
-#            echo "Branch analysis flags: $extra_flags"
-#          fi
-#
-#          sonar_url=${{ secrets.SONAR_URL }}
-#          sonar_token=${{ secrets.SONAR_TOKEN }}
-#          echo "Event name: $event_name"
-#          echo "Sonar URL: $sonar_url"
-#
-#          echo "Running SonarQube analysis"
-#          ./configure.sh
-#          ./gradlew sonarqube --no-daemon -x build -x test $extra_flags \
-#          -Dsonar.organization=rsksmart -Dsonar.host.url="$sonar_url" -Dsonar.login="$sonar_token"
-#
-#  tests:
-#    needs: build
-#    runs-on: ubuntu-latest
-#    container:
-#      image: openjdk:8-jdk
-#    defaults:
-#      run:
-#        working-directory: .
-#    steps:
-#      - uses: actions/checkout@v2
-#
-#      - name: Setup System Tools
-#        run: |
-#          apt update -y
-#          apt install -y curl
-#      - name: Install Node.js
-#        run: |
-#          curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
-#          apt-get install -y nodejs
-#      - name: Check Node.js version
-#        run: node --version
-#
-#      - uses: actions/cache@v4
-#        name: Restore gradle cache
-#        with:
-#          path: |
-#            .gradle/caches
-#            gradle/wrapper
-#          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-#          restore-keys: |
-#            ${{ runner.os }}-gradle-
-#
-#      - name: Get Gradle jar
-#        run: |
-#          ./configure.sh
-#
-#      - name: Unit tests
-#        run: |
-#          chmod +x ./gradlew
-#          ./gradlew --no-daemon --stacktrace test
-#      - name: Integration tests
-#        run: |
-#          chmod +x ./gradlew
-#          ./gradlew --no-daemon --stacktrace test
-#
-#      - name: Save test results
-#        run: |
-#          mkdir -p ~/junit/
-#          find rskj-core/build/test-results -type f -name "*.xml" -exec cp {} ~/junit/ \;
-#        if: always()
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: openjdk:8-jdk
+    env:
+      _JAVA_OPTIONS: "-Xmx3G -Xms2G"
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup System Tools
+        run: |
+          apt update -y
+          apt install -y gnupg2 curl
+      - name: Install Node.js
+        run: |
+          curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
+          apt-get install -y nodejs
+      - name: Check Node.js version
+        run: node --version
+      - name: Verify files
+        run: |
+          curl -sSL https://secchannel.rsk.co/SUPPORT.asc | gpg2 --import -
+          gpg2 --verify SHA256SUMS.asc && sha256sum --check SHA256SUMS.asc
+
+      - uses: actions/cache@v4
+        name: Cache Gradle
+        with:
+          path: |
+            .gradle/caches
+            gradle/wrapper
+            rsk-core/build
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Build
+        run: |
+          ./configure.sh
+          ./gradlew --no-daemon dependencies
+          ./gradlew --no-daemon --stacktrace build -x test
+          ls -la ./gradle/wrapper/gradle-wrapper.jar
+
+  sonarqube:
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: eclipse-temurin:17-jdk
+    defaults:
+        run:
+            working-directory: .
+    steps:
+      - uses: actions/checkout@v2
+      - name: Run SonarQube analysis
+        run: |
+          echo "Installing git"
+          apt-get update && apt-get install -yqq git
+          extra_flags=""
+          echo "Get GH event type"
+          event_name="${{ github.event_name }}"
+          if [ "$event_name" = "pull_request" ]; then
+            echo "Setting up PR analysis"
+            echo "switch to master"
+            git branch -f master origin/master
+            pr_number=${{ github.event.pull_request.number }}
+            echo "PR number: $pr_number"
+            extra_flags="-Dsonar.pullrequest.base=master -Dsonar.pullrequest.branch=${{ github.head_ref }} -Dsonar.pullrequest.key=$pr_number"
+            echo "PR analysis flags: $extra_flags"
+          else
+            echo "Setting up branch analysis"
+            extra_flags="-Dsonar.branch.name=master"
+            echo "Branch analysis flags: $extra_flags"
+          fi
+
+          sonar_url=${{ secrets.SONAR_URL }}
+          sonar_token=${{ secrets.SONAR_TOKEN }}
+          echo "Event name: $event_name"
+          echo "Sonar URL: $sonar_url"
+
+          echo "Running SonarQube analysis"
+          ./configure.sh
+          ./gradlew sonarqube --no-daemon -x build -x test $extra_flags \
+          -Dsonar.organization=rsksmart -Dsonar.host.url="$sonar_url" -Dsonar.login="$sonar_token"
+
+  tests:
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: openjdk:8-jdk
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Setup System Tools
+        run: |
+          apt update -y
+          apt install -y curl
+      - name: Install Node.js
+        run: |
+          curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
+          apt-get install -y nodejs
+      - name: Check Node.js version
+        run: node --version
+
+      - uses: actions/cache@v4
+        name: Restore gradle cache
+        with:
+          path: |
+            .gradle/caches
+            gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Get Gradle jar
+        run: |
+          ./configure.sh
+
+      - name: Unit tests
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace test
+      - name: Integration tests
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace test
+
+      - name: Save test results
+        run: |
+          mkdir -p ~/junit/
+          find rskj-core/build/test-results -type f -name "*.xml" -exec cp {} ~/junit/ \;
+        if: always()
 
   build-push-docker-images:
     runs-on: ubuntu-latest
@@ -167,7 +159,7 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push Docker images
@@ -179,12 +171,10 @@ jobs:
 
 
   mining-tests:
-    needs: build-push-docker-images
+    needs:
+      - build-push-docker-images
+      - build
     runs-on: ubuntu-latest
-#    defaults:
-#        run:
-#            working-directory: .
-
     services:
         bitcoind1:
             image: jurajpiar/bitcoind1:latest
@@ -200,38 +190,6 @@ jobs:
             - 31592:31592
             - 32592:32592
             options: --name bitcoind2
-
-
-#      - name: Checkout
-#        uses: actions/checkout@v4
-#
-#      - name: Setup System Tools
-#        run: |
-#          sudo apt update -y
-#          sudo apt install -y curl jq lsof
-#
-#      - name: Wait for Bitcoin nodes to initialize
-#        run: |
-#          counter=0
-#          while ! lsof -i:32591; do
-#            echo "Waiting for bitcoind1 to start..."
-#            sleep 5
-#            counter=$((counter+1))
-#            if [ $counter -gt 10 ]; then
-#              echo "bitcoind1 failed to start"
-#              exit 1
-#            fi
-#          done
-
-#  mining-tests:
-##    needs: build
-#    runs-on: ubuntu-latest
-##    container:
-##      image: openjdk:8-jdk
-#    defaults:
-#      run:
-#        working-directory: .
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -247,17 +205,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: jurajpiar/mining-integration-tests
-#          ref: ${{ secrets.MINING_INTEGRATION_TESTS_REF }}
-#          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ secrets.MINING_INTEGRATION_TESTS_REF }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           path: mining-integration-tests
-
-#      - uses: actions/cache@v2
-#        with:
-#          path: |
-#            node_modules
-#          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
-#          restore-keys: |
-#            ${{ runner.os }}-node-
 
       - name: Install Mining Integration Tests dependencies
         working-directory: mining-integration-tests
@@ -278,35 +228,22 @@ jobs:
       - name: Verify Java installation
         run: java -version
 
-#      - uses: actions/cache@v4
-#        name: Restore gradle cache
-#        with:
-#          path: |
-#            .gradle/caches
-#            gradle/wrapper
-#          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-#          restore-keys: |
-#            ${{ runner.os }}-gradle-
-#
-      - name: Get Gradle jar
-        run: |
-          ./configure.sh
-
-#      - uses: actions/cache@v4
-#        name: Restore build
-#        with:
-#          path: |
-#            rsk-core/build
-#          key: ${{ runner.os }}-build-${{ hashFiles('build') }}
-#          restore-keys: |
-#            ${{ runner.os }}-build-
+      - uses: actions/cache@v4
+        name: Restore gradle cache
+        with:
+          path: |
+            .gradle/caches
+            gradle/wrapper
+            rsk-core/build
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
 
       - name: Build
         run: |
           ./configure.sh
           ./gradlew --no-daemon dependencies
           ./gradlew --no-daemon --stacktrace build -x test
-          ls -la ./gradle/wrapper/gradle-wrapper.jar
 
       - name: Start RSKj and Run Tests
         working-directory: mining-integration-tests
