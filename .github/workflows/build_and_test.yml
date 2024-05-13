@@ -42,7 +42,7 @@ jobs:
           path: |
             .gradle/caches
             gradle/wrapper
-            rsk-core/build
+            rskj-core/build
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
@@ -57,43 +57,58 @@ jobs:
   sonarqube:
     needs: build
     runs-on: ubuntu-latest
-    container:
-      image: eclipse-temurin:17-jdk
-    defaults:
-        run:
-            working-directory: .
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Verify Java installation
+        run: java -version
+
+      - uses: actions/cache@v4
+        name: Restore Gradle cache
+        with:
+          path: |
+            .gradle/caches
+            gradle/wrapper
+            rskj-core/build
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Build
+        run: |
+          ./configure.sh
+
       - name: Run SonarQube analysis
         run: |
-          echo "Installing git"
-          apt-get update && apt-get install -yqq git
+          sudo apt-get update && sudo apt-get install -yqq git
           extra_flags=""
-          echo "Get GH event type"
-          event_name="${{ github.event_name }}"
-          if [ "$event_name" = "pull_request" ]; then
-            echo "Setting up PR analysis"
-            echo "switch to master"
+          if [ -n "$CIRCLE_PULL_REQUEST" ]; then
+            # https://community.sonarsource.com/t/no-code-or-issue-found-in-pull-request-decorations-github-circleci/8496
             git branch -f master origin/master
-            pr_number=${{ github.event.pull_request.number }}
-            echo "PR number: $pr_number"
-            extra_flags="-Dsonar.pullrequest.base=master -Dsonar.pullrequest.branch=${{ github.head_ref }} -Dsonar.pullrequest.key=$pr_number"
-            echo "PR analysis flags: $extra_flags"
+            # extract PR number, as PR URLs are in the form
+            # https://github.com/$user/$repo/pull/$pr_number
+            pr_number==${{ github.event.pull_request.number }}
+            extra_flags="-Dsonar.pullrequest.base=master
+              -Dsonar.pullrequest.branch=${{ github.head_ref }}
+              -Dsonar.pullrequest.key=$pr_number"
           else
-            echo "Setting up branch analysis"
             extra_flags="-Dsonar.branch.name=master"
-            echo "Branch analysis flags: $extra_flags"
           fi
-
-          sonar_url=${{ secrets.SONAR_URL }}
-          sonar_token=${{ secrets.SONAR_TOKEN }}
-          echo "Event name: $event_name"
-          echo "Sonar URL: $sonar_url"
-
-          echo "Running SonarQube analysis"
-          ./configure.sh
-          ./gradlew sonarqube --no-daemon -x build -x test $extra_flags \
-          -Dsonar.organization=rsksmart -Dsonar.host.url="$sonar_url" -Dsonar.login="$sonar_token"
+          pwd
+          ls -al
+          ./gradlew sonarqube --no-daemon -x build -x test \
+              $extra_flags \
+              -Dsonar.organization=rsksmart \
+              -Dsonar.host.url="https://sonarcloud.io" \
+              -Dsonar.login="${{ secrets.SONAR_TOKEN }}"
 
   tests:
     needs: build
@@ -152,8 +167,8 @@ jobs:
       - name: Check out the mining integration tests repository
         uses: actions/checkout@v4
         with:
-          repository: jurajpiar/mining-integration-tests
-#          ref: ${{ secrets.MINING_INTEGRATION_TESTS_REF }}
+          repository: rsksmart/mining-integration-tests
+          ref: 8bbfd75328344eeff567c93ad15db1e864ba6445
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
@@ -164,27 +179,27 @@ jobs:
 
       - name: Build and push Docker images
         run: |
-          docker build -t jurajpiar/bitcoind1:latest -f bitcoind1.Dockerfile .
-          docker push jurajpiar/bitcoind1:latest
-          docker build -t jurajpiar/bitcoind2:latest -f bitcoind2.Dockerfile .
-            docker push jurajpiar/bitcoind2:latest
+          docker build -t rsksmart/mit_bitcoind1:latest -f bitcoind1.Dockerfile .
+          docker push rsksmart/mit_bitcoind1:latest
+          docker build -t rsksmart/mit_bitcoind2:latest -f bitcoind2.Dockerfile .
+            docker push rsksmart/mit_bitcoind2:latest
 
 
   mining-tests:
     needs:
-      - build-push-docker-images
+#      - build-push-docker-images // TODO: Uncomment once the we have the permission to push the images
       - build
     runs-on: ubuntu-latest
     services:
         bitcoind1:
-            image: jurajpiar/bitcoind1:latest
+            image: jurajpiar/mit_bitcoind1:latest
             ports:
             - 8331:8331
             - 31591:31591
             - 32591:32591
             options: --name bitcoind1
         bitcoind2:
-            image: jurajpiar/bitcoind2:latest
+            image: jurajpiar/mit_bitcoind2:latest
             ports:
             - 8332:8332
             - 31592:31592
@@ -204,7 +219,7 @@ jobs:
       - name: Checkout Mining Integration Tests Repository
         uses: actions/checkout@v4
         with:
-          repository: jurajpiar/mining-integration-tests
+          repository: rsksmart/mining-integration-tests
           ref: ${{ secrets.MINING_INTEGRATION_TESTS_REF }}
           token: ${{ secrets.GITHUB_TOKEN }}
           path: mining-integration-tests
@@ -213,6 +228,11 @@ jobs:
         working-directory: mining-integration-tests
         run: |
           npm ci
+
+      - name: Change mining-integration-tests bitcoind url in config.json to localhost
+        working-directory: mining-integration-tests
+        run: |
+          sed -i 's/bitcoind01/localhost/g' config.json
 
       - name: Generate BTC blocks
         working-directory: mining-integration-tests
@@ -234,17 +254,16 @@ jobs:
           path: |
             .gradle/caches
             gradle/wrapper
-            rsk-core/build
+            rskj-core/build
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
 
       - name: Build
         run: |
-          ls -al rskj-core/build
-          ls -al ./gradle/wrapper/gradle-wrapper.jar
-          ./configure.sh
-
+          if [ ! -d rskj-core/build ]; then
+            ./configure.sh
+          fi
       - name: Start RSKj and Run Tests
         working-directory: mining-integration-tests
         run: |
