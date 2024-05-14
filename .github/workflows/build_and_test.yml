@@ -177,12 +177,43 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build and push Docker images
+        env:
+          DOCKER_BUILDKIT: 1
         run: |
-          docker build -t rsksmart/mit_bitcoind1:latest -f bitcoind1.Dockerfile .
-          docker push rsksmart/mit_bitcoind1:latest
-          docker build -t rsksmart/mit_bitcoind2:latest -f bitcoind2.Dockerfile .
-            docker push rsksmart/mit_bitcoind2:latest
+          for service in bitcoind1 bitcoind2; do
+            image="jurajpiar/mit_${service}:latest"
+            docker pull $image || true
+
+            # Build the new image
+            docker build --cache-from=$image -t $image -f ${service}.Dockerfile .
+
+            # Get the new image digest
+            new_digest=$(docker inspect --format='{{index .RepoDigests 0}}' $image || echo "")
+
+            # Get the remote image digest
+            remote_digest=$(docker inspect --format='{{index .RepoDigests 0}}' $image || echo "")
+
+            # Check if the new digest is empty (meaning the image is new and has not been pushed yet)
+            if [ -z "$new_digest" ]; then
+              new_digest=$(docker inspect --format='{{.Id}}' $image)
+            fi
+
+            # Compare the digests
+            if [ "$new_digest" != "$remote_digest" ]; then
+              echo "Pushing $image as it has changed"
+              docker push $image
+            else
+              echo "$image has not changed, skipping push"
+            fi
+          done
+#          docker build -t rsksmart/mit_bitcoind1:latest -f bitcoind1.Dockerfile .
+#          docker push rsksmart/mit_bitcoind1:latest
+#          docker build -t rsksmart/mit_bitcoind2:latest -f bitcoind2.Dockerfile .
+#            docker push rsksmart/mit_bitcoind2:latest
 
 
   mining-tests:
