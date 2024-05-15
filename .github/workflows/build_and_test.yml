@@ -167,53 +167,26 @@ jobs:
       - name: Check out the mining integration tests repository
         uses: actions/checkout@v4
         with:
-          repository: rsksmart/mining-integration-tests
+          repository: jurajpiar/mining-integration-tests
           ref: 8bbfd75328344eeff567c93ad15db1e864ba6445
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Log in to Github Container Registry
+        run: echo "${{ secrets.GH_CONTAINER_REGISTRY_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+#        uses: docker/login-action@v3
+#        with:
+#          registry: ghcr.io
+#          username: ${{ github.actor }}
+#          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker images
         env:
           DOCKER_BUILDKIT: 1
         run: |
-          for service in bitcoind1 bitcoind2; do
-            image="jurajpiar/mit_${service}:latest"
-            docker pull $image || true
-
-            # Build the new image
-            docker build --cache-from=$image -t $image -f ${service}.Dockerfile .
-
-            # Get the new image digest
-            new_digest=$(docker inspect --format='{{index .RepoDigests 0}}' $image || echo "")
-
-            # Get the remote image digest
-            remote_digest=$(docker inspect --format='{{index .RepoDigests 0}}' $image || echo "")
-
-            # Check if the new digest is empty (meaning the image is new and has not been pushed yet)
-            if [ -z "$new_digest" ]; then
-              new_digest=$(docker inspect --format='{{.Id}}' $image)
-            fi
-
-            # Compare the digests
-            if [ "$new_digest" != "$remote_digest" ]; then
-              echo "Pushing $image as it has changed"
-              docker push $image
-            else
-              echo "$image has not changed, skipping push"
-            fi
-          done
-#          docker build -t rsksmart/mit_bitcoind1:latest -f bitcoind1.Dockerfile .
-#          docker push rsksmart/mit_bitcoind1:latest
-#          docker build -t rsksmart/mit_bitcoind2:latest -f bitcoind2.Dockerfile .
-#            docker push rsksmart/mit_bitcoind2:latest
+          docker build -t ghcr.io/${{ github.repository }}/mit_bitcoind1:latest -f bitcoind1.Dockerfile .
+          docker push ghcr.io/${{ github.repository }}/mit_bitcoind1:latest
+          docker build -t ghcr.io/${{ github.repository }}/mit_bitcoind2:latest -f bitcoind2.Dockerfile .
+          docker push ghcr.io/${{ github.repository }}/mit_bitcoind2:latest
 
 
   mining-tests:
@@ -223,14 +196,14 @@ jobs:
     runs-on: ubuntu-latest
     services:
         bitcoind1:
-            image: jurajpiar/mit_bitcoind1:latest
+            image: ghcr.io/${{ github.repository }}/mit_bitcoind1:latest
             ports:
             - 8331:8331
             - 31591:31591
             - 32591:32591
             options: --name bitcoind1
         bitcoind2:
-            image: jurajpiar/mit_bitcoind2:latest
+            image: ghcr.io/${{ github.repository }}/mit_bitcoind2:latest
             ports:
             - 8332:8332
             - 31592:31592
