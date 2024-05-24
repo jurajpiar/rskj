@@ -21,6 +21,9 @@ import co.rsk.bitcoinj.core.NetworkParameters;
 import co.rsk.cli.CliArgs;
 import co.rsk.cli.RskCli;
 import co.rsk.config.*;
+import co.rsk.mine.minGasPrice.EthCallProvider;
+import co.rsk.mine.minGasPrice.MinGasPriceProvider;
+import co.rsk.mine.minGasPrice.HttpGetProvider;
 import co.rsk.core.*;
 import co.rsk.core.bc.*;
 import co.rsk.crypto.Keccak256;
@@ -40,6 +43,7 @@ import co.rsk.metrics.HashRateCalculator;
 import co.rsk.metrics.HashRateCalculatorMining;
 import co.rsk.metrics.HashRateCalculatorNonMining;
 import co.rsk.mine.*;
+import co.rsk.mine.MinimumGasPriceCalculator;
 import co.rsk.net.*;
 import co.rsk.net.discovery.KnownPeersHandler;
 import co.rsk.net.discovery.PeerExplorer;
@@ -90,6 +94,8 @@ import co.rsk.util.RskCustomCache;
 import co.rsk.validators.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.annotations.VisibleForTesting;
+import com.typesafe.config.Config;
+import com.typesafe.config.ConfigObject;
 import org.ethereum.config.Constants;
 import org.ethereum.config.SystemProperties;
 import org.ethereum.config.blockchain.upgrades.ActivationConfig;
@@ -1842,7 +1848,7 @@ public class RskContext implements NodeContext, NodeBootstrapper {
                     getMinerClock(),
                     getBlockFactory(),
                     getBlockExecutor(),
-                    new MinimumGasPriceCalculator(Coin.valueOf(getMiningConfig().getMinGasPriceTarget())),
+                    new MinimumGasPriceCalculator(getMiningConfig().getMinGasPriceProvider()),
                     new MinerUtils(),
                     getBlockTxSignatureCache()
             );
@@ -2142,7 +2148,6 @@ public class RskContext implements NodeContext, NodeBootstrapper {
                     rskSystemProperties.coinbaseAddress(),
                     rskSystemProperties.minerMinFeesNotifyInDollars(),
                     rskSystemProperties.minerGasUnitInDollars(),
-                    rskSystemProperties.minerMinGasPrice(),
                     rskSystemProperties.getNetworkConstants().getUncleListLimit(),
                     rskSystemProperties.getNetworkConstants().getUncleGenerationLimit(),
                     new GasLimitConfig(
@@ -2151,7 +2156,42 @@ public class RskContext implements NodeContext, NodeBootstrapper {
                             rskSystemProperties.getForceTargetGasLimit()
                     ),
                     rskSystemProperties.isMinerServerFixedClock(),
-                    rskSystemProperties.workSubmissionRateLimitInMills()
+                    rskSystemProperties.workSubmissionRateLimitInMills(),
+                    new MinGasPriceProvider(
+                            rskSystemProperties.minerStableGasPriceEnabled(),
+                            rskSystemProperties.minerMinGasPrice(),
+                            rskSystemProperties.minerStableGasPriceMinStableGasPrice(),
+                            rskSystemProperties.minerStableGasPriceRefreshRate(),
+                            rskSystemProperties.minerStableGasPriceSources().stream().map(source -> {
+                                StableMinGasPriceSourceConfig sourceConfig = new StableMinGasPriceSourceConfig(
+                                        (ConfigObject) source
+                                );
+
+                                String type = sourceConfig.sourceType();
+                                if (type == null) {
+                                    throw new IllegalArgumentException("Missing 'type' for a source in miner stableGasPrice");
+                                }
+                                if (type.equals("HTTP-GET")) {
+                                    return new HttpGetProvider(
+                                        sourceConfig.sourceParamsUrl(),
+                                        sourceConfig.sourceParamsApiKey(),
+                                        sourceConfig.sourceParamsJsonPath(),
+                                        sourceConfig.sourceParamsTimeout()
+                                    );
+                                }
+                                if (type.equals("ETH_CALL")) {
+                                    return new EthCallProvider(
+                                            sourceConfig.sourceParamsContract(),
+                                            sourceConfig.sourceParamsContractMethod(),
+                                            sourceConfig.sourceParamsContractMethodParams(),
+                                            getEthModule()
+                                    );
+                                }
+                                logger.error("Unknown 'type' in miner stableGasPrice providers: {}", type);
+
+                                return null;
+                            }).collect(Collectors.toList())
+                    )
             );
         }
 

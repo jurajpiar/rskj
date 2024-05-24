@@ -18,6 +18,7 @@
 
 package co.rsk.config;
 
+import co.rsk.mine.minGasPrice.MinGasPriceProvider;
 import co.rsk.core.RskAddress;
 
 /**
@@ -29,20 +30,28 @@ public class MiningConfig {
     private final RskAddress coinbaseAddress;
     private final double minFeesNotifyInDollars;
     private final double minerGasUnitInDollars;
-    private final long minGasPriceTarget;
+    private final MinGasPriceProvider minGasPriceProvider;
     private final int uncleListLimit;
     private final int uncleGenerationLimit;
     private final GasLimitConfig gasLimit;
     private final boolean isFixedClock;
     private final long workSubmissionRateLimitInMills;
 
-    public MiningConfig(RskAddress coinbaseAddress, double minFeesNotifyInDollars, double minerGasUnitInDollars,
-                        long minGasPriceTarget, int uncleListLimit, int uncleGenerationLimit, GasLimitConfig gasLimit,
-                        boolean isFixedClock, long workSubmissionRateLimitInMills) {
+    public MiningConfig(
+            RskAddress coinbaseAddress,
+            double minFeesNotifyInDollars,
+            double minerGasUnitInDollars,
+            int uncleListLimit,
+            int uncleGenerationLimit,
+            GasLimitConfig gasLimit,
+            boolean isFixedClock,
+            long workSubmissionRateLimitInMills,
+            MinGasPriceProvider minGasPriceProvider
+    ) {
         this.coinbaseAddress = coinbaseAddress;
         this.minFeesNotifyInDollars = minFeesNotifyInDollars;
         this.minerGasUnitInDollars = minerGasUnitInDollars;
-        this.minGasPriceTarget= minGasPriceTarget;
+        this.minGasPriceProvider = minGasPriceProvider;
         this.uncleListLimit = uncleListLimit;
         this.uncleGenerationLimit = uncleGenerationLimit;
         this.gasLimit = gasLimit;
@@ -63,7 +72,7 @@ public class MiningConfig {
     }
 
     public long getMinGasPriceTarget() {
-        return minGasPriceTarget;
+        return minGasPriceProvider.getMinFixedGasPriceTarget();
     }
 
     public int getUncleListLimit() {
@@ -84,5 +93,9 @@ public class MiningConfig {
 
     public long getWorkSubmissionRateLimitInMills() {
         return workSubmissionRateLimitInMills;
+    }
+
+    public MinGasPriceProvider getMinGasPriceProvider() {
+        return minGasPriceProvider;
     }
 }
