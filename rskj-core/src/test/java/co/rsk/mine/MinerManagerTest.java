@@ -291,7 +291,7 @@ public class MinerManagerTest {
                         clock,
                         blockFactory,
                         blockExecutor,
-                        new MinimumGasPriceCalculator(Coin.valueOf(miningConfig.getMinGasPriceTarget())),
+                        new MinimumGasPriceCalculator(miningConfig.getMinGasPriceProvider()),
                         new MinerUtils(),
                         new BlockTxSignatureCache(new ReceivedTxSignatureCache()) // TODO -> should it be ReceivedTxSignatureCache? See Miner Server Test for reference
                 ),

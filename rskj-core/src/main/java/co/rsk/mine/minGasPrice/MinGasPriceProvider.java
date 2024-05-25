@@ -11,12 +11,16 @@ public class MinGasPriceProvider {
     private final int refreshRate;
     private final List<ConversionRateProvider> providers;
 
-    public MinGasPriceProvider(boolean enabled, long minFixedGasPriceTarget, long minStableGasPrice, int refreshRate, List<ConversionRateProvider> providers) {
-        this.enabled = enabled;
+    public MinGasPriceProvider(boolean isStableMinGasPrice, long minFixedGasPriceTarget, long minStableGasPrice, int refreshRate, List<ConversionRateProvider> providers) {
+        this.enabled = isStableMinGasPrice;
         this.minFixedGasPriceTarget = minFixedGasPriceTarget;
         this.minStableGasPrice = minStableGasPrice;
         this.refreshRate = refreshRate;
         this.providers = providers;
+    }
+
+    public MinGasPriceProvider(long minFixedGasPriceTarget) {
+        this(false, minFixedGasPriceTarget, 0, 0, null);
     }
 
     public boolean isEnabled() {

@@ -21,6 +21,7 @@ import co.rsk.bitcoinj.core.NetworkParameters;
 import co.rsk.cli.CliArgs;
 import co.rsk.cli.RskCli;
 import co.rsk.config.*;
+import co.rsk.mine.minGasPrice.ConversionRateProvider;
 import co.rsk.mine.minGasPrice.EthCallProvider;
 import co.rsk.mine.minGasPrice.MinGasPriceProvider;
 import co.rsk.mine.minGasPrice.HttpGetProvider;
@@ -95,6 +96,7 @@ import co.rsk.validators.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.annotations.VisibleForTesting;
 import com.typesafe.config.Config;
+import com.typesafe.config.ConfigList;
 import com.typesafe.config.ConfigObject;
 import org.ethereum.config.Constants;
 import org.ethereum.config.SystemProperties;
@@ -1635,7 +1637,7 @@ public class RskContext implements NodeContext, NodeBootstrapper {
 
         if (rskSystemProperties.usePeersFromLastSession()) {
             List<String> peerLastSession = knownPeersHandler.readPeers();
-            logger.debug("Loading peers from previous session: {}",peerLastSession);
+            logger.debug("Loading peers from previous session: {}", peerLastSession);
             initialBootNodes.addAll(peerLastSession);
         }
         return new ArrayList<>(initialBootNodes);
@@ -2148,6 +2150,13 @@ public class RskContext implements NodeContext, NodeBootstrapper {
                     rskSystemProperties.coinbaseAddress(),
                     rskSystemProperties.minerMinFeesNotifyInDollars(),
                     rskSystemProperties.minerGasUnitInDollars(),
+                    new MinGasPriceProvider(
+                            rskSystemProperties.minerStableGasPriceEnabled(),
+                            rskSystemProperties.minerMinGasPrice(),
+                            rskSystemProperties.minerStableGasPriceMinStableGasPrice(),
+                            rskSystemProperties.minerStableGasPriceRefreshRate(),
+                            getConversionRateProviders(rskSystemProperties.minerStableGasPriceSources())
+                    ),
                     rskSystemProperties.getNetworkConstants().getUncleListLimit(),
                     rskSystemProperties.getNetworkConstants().getUncleGenerationLimit(),
                     new GasLimitConfig(
@@ -2156,46 +2165,48 @@ public class RskContext implements NodeContext, NodeBootstrapper {
                             rskSystemProperties.getForceTargetGasLimit()
                     ),
                     rskSystemProperties.isMinerServerFixedClock(),
-                    rskSystemProperties.workSubmissionRateLimitInMills(),
-                    new MinGasPriceProvider(
-                            rskSystemProperties.minerStableGasPriceEnabled(),
-                            rskSystemProperties.minerMinGasPrice(),
-                            rskSystemProperties.minerStableGasPriceMinStableGasPrice(),
-                            rskSystemProperties.minerStableGasPriceRefreshRate(),
-                            rskSystemProperties.minerStableGasPriceSources().stream().map(source -> {
-                                StableMinGasPriceSourceConfig sourceConfig = new StableMinGasPriceSourceConfig(
-                                        (ConfigObject) source
-                                );
-
-                                String type = sourceConfig.sourceType();
-                                if (type == null) {
-                                    throw new IllegalArgumentException("Missing 'type' for a source in miner stableGasPrice");
-                                }
-                                if (type.equals("HTTP-GET")) {
-                                    return new HttpGetProvider(
-                                        sourceConfig.sourceParamsUrl(),
-                                        sourceConfig.sourceParamsApiKey(),
-                                        sourceConfig.sourceParamsJsonPath(),
-                                        sourceConfig.sourceParamsTimeout()
-                                    );
-                                }
-                                if (type.equals("ETH_CALL")) {
-                                    return new EthCallProvider(
-                                            sourceConfig.sourceParamsContract(),
-                                            sourceConfig.sourceParamsContractMethod(),
-                                            sourceConfig.sourceParamsContractMethodParams(),
-                                            getEthModule()
-                                    );
-                                }
-                                logger.error("Unknown 'type' in miner stableGasPrice providers: {}", type);
-
-                                return null;
-                            }).collect(Collectors.toList())
-                    )
+                    rskSystemProperties.workSubmissionRateLimitInMills()
             );
         }
 
         return miningConfig;
+    }
+
+    private @Nonnull List<ConversionRateProvider> getConversionRateProviders(ConfigList minerStableGasPriceSources) {
+        return minerStableGasPriceSources
+                .stream()
+                .map(source -> createConversionRateProvider((ConfigObject) source))
+                .collect(Collectors.toList());
+    }
+
+    private @Nullable ConversionRateProvider createConversionRateProvider(ConfigObject sourceConfigObject) {
+        StableMinGasPriceSourceConfig sourceConfig = new StableMinGasPriceSourceConfig(
+                sourceConfigObject
+        );
+
+        String type = sourceConfig.sourceType();
+        if (type == null) {
+            throw new IllegalArgumentException("Missing 'type' for a source in miner stableGasPrice");
+        }
+        if (type.equals("HTTP_GET")) {
+            return new HttpGetProvider(
+                    sourceConfig.sourceParamsUrl(),
+                    sourceConfig.sourceParamsApiKey(),
+                    sourceConfig.sourceParamsJsonPath(),
+                    sourceConfig.sourceParamsTimeout()
+            );
+        }
+        if (type.equals("ETH_CALL")) {
+            return new EthCallProvider(
+                    sourceConfig.sourceParamsContract(),
+                    sourceConfig.sourceParamsContractMethod(),
+                    sourceConfig.sourceParamsContractMethodParams(),
+                    getEthModule()
+            );
+        }
+        logger.error("Unknown 'type' in miner stableGasPrice providers: {}", type);
+
+        return null;
     }
 
     private GasLimitCalculator getGasLimitCalculator() {

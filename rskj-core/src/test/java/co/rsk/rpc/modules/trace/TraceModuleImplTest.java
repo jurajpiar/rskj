@@ -23,6 +23,7 @@ import co.rsk.config.RskSystemProperties;
 import co.rsk.core.Coin;
 import co.rsk.core.DifficultyCalculator;
 import co.rsk.mine.*;
+import co.rsk.mine.minGasPrice.MinGasPriceProvider;
 import co.rsk.rpc.ExecutionBlockRetriever;
 import co.rsk.test.World;
 import co.rsk.test.builders.AccountBuilder;
@@ -45,6 +46,7 @@ import org.junit.jupiter.api.Test;
 import java.io.FileNotFoundException;
 import java.math.BigInteger;
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -425,7 +427,13 @@ class TraceModuleImplTest {
                 rskSystemProperties.coinbaseAddress(),
                 rskSystemProperties.minerMinFeesNotifyInDollars(),
                 rskSystemProperties.minerGasUnitInDollars(),
-                rskSystemProperties.minerMinGasPrice(),
+                new MinGasPriceProvider(
+                        rskSystemProperties.minerStableGasPriceEnabled(),
+                        rskSystemProperties.minerMinGasPrice(),
+                        rskSystemProperties.minerStableGasPriceMinStableGasPrice(),
+                        rskSystemProperties.minerStableGasPriceRefreshRate(),
+                        new ArrayList<>()
+                ),
                 rskSystemProperties.getNetworkConstants().getUncleListLimit(),
                 rskSystemProperties.getNetworkConstants().getUncleGenerationLimit(),
                 new GasLimitConfig(
@@ -452,7 +460,7 @@ class TraceModuleImplTest {
                 new MinerClock(miningConfig.isFixedClock(), Clock.systemUTC()),
                 new BlockFactory(rskSystemProperties.getActivationConfig()),
                 world.getBlockExecutor(),
-                new MinimumGasPriceCalculator(Coin.valueOf(miningConfig.getMinGasPriceTarget())),
+                new MinimumGasPriceCalculator(miningConfig.getMinGasPriceProvider()),
                 new MinerUtils(),
                 world.getBlockTxSignatureCache()
         );

@@ -41,12 +41,12 @@ public class MiningConfig {
             RskAddress coinbaseAddress,
             double minFeesNotifyInDollars,
             double minerGasUnitInDollars,
+            MinGasPriceProvider minGasPriceProvider,
             int uncleListLimit,
             int uncleGenerationLimit,
             GasLimitConfig gasLimit,
             boolean isFixedClock,
-            long workSubmissionRateLimitInMills,
-            MinGasPriceProvider minGasPriceProvider
+            long workSubmissionRateLimitInMills
     ) {
         this.coinbaseAddress = coinbaseAddress;
         this.minFeesNotifyInDollars = minFeesNotifyInDollars;
