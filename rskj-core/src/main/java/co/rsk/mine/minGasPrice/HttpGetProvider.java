@@ -1,15 +1,17 @@
 package co.rsk.mine.minGasPrice;
 
+import java.time.Duration;
+
 public class HttpGetProvider extends ConversionRateProvider {
     private final String url;
     private final String apiKey;
     private final String jsonPath;
-    private final int timeout;
+    private final Duration timeout;
 
     public HttpGetProvider(
             String url, String apiKey,
             String jsonPath,
-            int timeout
+            Duration timeout
     ) {
         super("HTTP_GET");
         this.url = url;
@@ -26,7 +28,7 @@ public class HttpGetProvider extends ConversionRateProvider {
         return jsonPath;
     }
 
-    public int getTimeout() {
+    public Duration getTimeout() {
         return timeout;
     }
 

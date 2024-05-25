@@ -2188,20 +2188,20 @@ public class RskContext implements NodeContext, NodeBootstrapper {
         if (type == null) {
             throw new IllegalArgumentException("Missing 'type' for a source in miner stableGasPrice");
         }
-        if (type.equals("HTTP_GET")) {
+        if (type.equalsIgnoreCase("HTTP_GET")) {
             return new HttpGetProvider(
-                    sourceConfig.sourceParamsUrl(),
-                    sourceConfig.sourceParamsApiKey(),
-                    sourceConfig.sourceParamsJsonPath(),
-                    sourceConfig.sourceParamsTimeout()
+                    sourceConfig.sourceUrl(),
+                    sourceConfig.sourceApiKey(),
+                    sourceConfig.sourceJsonPath(),
+                    sourceConfig.sourceTimeout()
             );
         }
-        if (type.equals("ETH_CALL")) {
+        if (type.equalsIgnoreCase("ETH_CALL")) {
             return new EthCallProvider(
-                    sourceConfig.sourceParamsContract(),
-                    sourceConfig.sourceParamsContractMethod(),
-                    sourceConfig.sourceParamsContractMethodParams(),
-                    getEthModule()
+                    sourceConfig.sourceContract(),
+                    sourceConfig.sourceContractMethod(),
+                    sourceConfig.sourceContractMethodParams()
+//                    getEthModule() // FIXME: this creates halting problem
             );
         }
         logger.error("Unknown 'type' in miner stableGasPrice providers: {}", type);

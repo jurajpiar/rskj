@@ -8,19 +8,19 @@ public class EthCallProvider extends ConversionRateProvider {
     private final String address;
     private final String method;
     private final List<String> params;
-    private final EthModule ethModule;
+//    private final EthModule ethModule;
 
     public EthCallProvider(
             String address,
             String method,
             List<String> params,
-            EthModule ethModule
+//            EthModule ethModule
     ) {
         super("ETH_CALL");
         this.address = address;
         this.method = method;
         this.params = params;
-        this.ethModule = ethModule;
+//        this.ethModule = ethModule;
     }
 
     public String getAddress() {

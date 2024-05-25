@@ -176,8 +176,8 @@ public class RskSystemProperties extends SystemProperties {
         return configFromFiles.getLong("miner.stableGasPrice.minStableGasPrice");
     }
 
-    public int minerStableGasPriceRefreshRate(){
-        return configFromFiles.getInt("miner.stableGasPrice.refreshRate");
+    public Duration minerStableGasPriceRefreshRate(){
+        return configFromFiles.getDuration("miner.stableGasPrice.refreshRate");
     }
 
     public ConfigList minerStableGasPriceSources(){

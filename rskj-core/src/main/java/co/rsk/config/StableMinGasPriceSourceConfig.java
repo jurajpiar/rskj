@@ -3,6 +3,7 @@ package co.rsk.config;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigObject;
 
+import java.time.Duration;
 import java.util.List;
 
 public class StableMinGasPriceSourceConfig
@@ -17,31 +18,31 @@ public class StableMinGasPriceSourceConfig
         return sourceConfig.getString("type");
     }
 
-    public String sourceParamsUrl() {
-        return sourceConfig.getString("params.url");
+    public String sourceUrl() {
+        return sourceConfig.getString("url");
     }
 
-    public String sourceParamsApiKey() {
-        return sourceConfig.getString("params.apiKey");
+    public String sourceApiKey() {
+        return sourceConfig.getString("apiKey");
     }
 
-    public String sourceParamsJsonPath() {
-        return sourceConfig.getString("params.jsonPath");
+    public String sourceJsonPath() {
+        return sourceConfig.getString("jsonPath");
     }
 
-    public int sourceParamsTimeout() {
-        return sourceConfig.getInt("params.timeout");
+    public Duration sourceTimeout() {
+        return sourceConfig.getDuration("timeout");
     }
 
-    public String sourceParamsContract() {
-        return sourceConfig.getString("params.contract");
+    public String sourceContract() {
+        return sourceConfig.getString("contract");
     }
 
-    public String sourceParamsContractMethod() {
-        return sourceConfig.getString("params.contractMethod");
+    public String sourceContractMethod() {
+        return sourceConfig.getString("method");
     }
 
-    public List<String> sourceParamsContractMethodParams() {
-        return sourceConfig.getStringList("params.contractMethodParams");
+    public List<String> sourceContractMethodParams() {
+        return sourceConfig.getStringList("params");
     }
 }
