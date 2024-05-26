@@ -20,15 +20,39 @@ package co.rsk;
 import co.rsk.bitcoinj.core.NetworkParameters;
 import co.rsk.cli.CliArgs;
 import co.rsk.cli.RskCli;
-import co.rsk.config.*;
-import co.rsk.mine.minGasPrice.ConversionRateProvider;
-import co.rsk.mine.minGasPrice.EthCallProvider;
-import co.rsk.mine.minGasPrice.MinGasPriceProvider;
-import co.rsk.mine.minGasPrice.HttpGetProvider;
-import co.rsk.core.*;
-import co.rsk.core.bc.*;
+import co.rsk.config.ConfigLoader;
+import co.rsk.config.GarbageCollectorConfig;
+import co.rsk.config.GasLimitConfig;
+import co.rsk.config.InternalService;
+import co.rsk.config.MiningConfig;
+import co.rsk.config.NodeCliFlags;
+import co.rsk.config.NodeCliOptions;
+import co.rsk.config.RskSystemProperties;
+import co.rsk.core.DifficultyCalculator;
+import co.rsk.core.NetworkStateExporter;
+import co.rsk.core.ReversibleTransactionExecutor;
+import co.rsk.core.RskAddress;
+import co.rsk.core.SnapshotManager;
+import co.rsk.core.TransactionExecutorFactory;
+import co.rsk.core.Wallet;
+import co.rsk.core.bc.BlockChainFlusher;
+import co.rsk.core.bc.BlockExecutor;
+import co.rsk.core.bc.BlockHeaderValidatorImpl;
+import co.rsk.core.bc.BlockRelayValidatorImpl;
+import co.rsk.core.bc.BlockValidatorImpl;
+import co.rsk.core.bc.BlockchainBranchComparator;
+import co.rsk.core.bc.ConsensusValidationMainchainView;
+import co.rsk.core.bc.ConsensusValidationMainchainViewImpl;
+import co.rsk.core.bc.GarbageCollector;
+import co.rsk.core.bc.MiningMainchainView;
+import co.rsk.core.bc.MiningMainchainViewImpl;
+import co.rsk.core.bc.TransactionPoolImpl;
 import co.rsk.crypto.Keccak256;
-import co.rsk.db.*;
+import co.rsk.db.MapDBBlocksIndex;
+import co.rsk.db.RepositoryLocator;
+import co.rsk.db.StateRootHandler;
+import co.rsk.db.StateRootsStore;
+import co.rsk.db.StateRootsStoreImpl;
 import co.rsk.db.importer.BootstrapImporter;
 import co.rsk.db.importer.BootstrapURLProvider;
 import co.rsk.db.importer.provider.BootstrapDataProvider;
@@ -43,9 +67,27 @@ import co.rsk.metrics.BlockHeaderElement;
 import co.rsk.metrics.HashRateCalculator;
 import co.rsk.metrics.HashRateCalculatorMining;
 import co.rsk.metrics.HashRateCalculatorNonMining;
-import co.rsk.mine.*;
+import co.rsk.mine.AutoMinerClient;
+import co.rsk.mine.BlockToMineBuilder;
+import co.rsk.mine.ForkDetectionDataCalculator;
+import co.rsk.mine.GasLimitCalculator;
+import co.rsk.mine.MinerClient;
+import co.rsk.mine.MinerClientImpl;
+import co.rsk.mine.MinerClock;
+import co.rsk.mine.MinerServer;
+import co.rsk.mine.MinerServerImpl;
+import co.rsk.mine.MinerUtils;
 import co.rsk.mine.MinimumGasPriceCalculator;
-import co.rsk.net.*;
+import co.rsk.mine.minGasPrice.MinGasPriceProvider;
+import co.rsk.net.AsyncNodeBlockProcessor;
+import co.rsk.net.BlockNodeInformation;
+import co.rsk.net.BlockSyncService;
+import co.rsk.net.NetBlockStore;
+import co.rsk.net.NodeBlockProcessor;
+import co.rsk.net.NodeMessageHandler;
+import co.rsk.net.StatusResolver;
+import co.rsk.net.SyncProcessor;
+import co.rsk.net.TransactionGateway;
 import co.rsk.net.discovery.KnownPeersHandler;
 import co.rsk.net.discovery.PeerExplorer;
 import co.rsk.net.discovery.UDPServer;
@@ -62,10 +104,23 @@ import co.rsk.pcc.altBN128.impls.AbstractAltBN128;
 import co.rsk.peg.BridgeSupportFactory;
 import co.rsk.peg.BtcBlockStoreWithCache;
 import co.rsk.peg.RepositoryBtcBlockStoreWithCache;
-import co.rsk.rpc.*;
+import co.rsk.rpc.CorsConfiguration;
+import co.rsk.rpc.EthSubscriptionNotificationEmitter;
+import co.rsk.rpc.ExecutionBlockRetriever;
+import co.rsk.rpc.JacksonBasedRpcSerializer;
+import co.rsk.rpc.JsonRpcSerializer;
+import co.rsk.rpc.Web3InformationRetriever;
+import co.rsk.rpc.Web3RskImpl;
 import co.rsk.rpc.modules.debug.DebugModule;
 import co.rsk.rpc.modules.debug.DebugModuleImpl;
-import co.rsk.rpc.modules.eth.*;
+import co.rsk.rpc.modules.eth.EthModule;
+import co.rsk.rpc.modules.eth.EthModuleTransaction;
+import co.rsk.rpc.modules.eth.EthModuleTransactionBase;
+import co.rsk.rpc.modules.eth.EthModuleTransactionDisabled;
+import co.rsk.rpc.modules.eth.EthModuleTransactionInstant;
+import co.rsk.rpc.modules.eth.EthModuleWallet;
+import co.rsk.rpc.modules.eth.EthModuleWalletDisabled;
+import co.rsk.rpc.modules.eth.EthModuleWalletEnabled;
 import co.rsk.rpc.modules.eth.subscribe.BlockHeaderNotificationEmitter;
 import co.rsk.rpc.modules.eth.subscribe.LogsNotificationEmitter;
 import co.rsk.rpc.modules.eth.subscribe.PendingTransactionsNotificationEmitter;
@@ -83,7 +138,12 @@ import co.rsk.rpc.modules.trace.TraceModule;
 import co.rsk.rpc.modules.trace.TraceModuleImpl;
 import co.rsk.rpc.modules.txpool.TxPoolModule;
 import co.rsk.rpc.modules.txpool.TxPoolModuleImpl;
-import co.rsk.rpc.netty.*;
+import co.rsk.rpc.netty.JsonRpcWeb3FilterHandler;
+import co.rsk.rpc.netty.JsonRpcWeb3ServerHandler;
+import co.rsk.rpc.netty.JsonRpcWeb3ServerProperties;
+import co.rsk.rpc.netty.RskWebSocketJsonRpcHandler;
+import co.rsk.rpc.netty.Web3HttpServer;
+import co.rsk.rpc.netty.Web3WebSocketServer;
 import co.rsk.scoring.PeerScoring;
 import co.rsk.scoring.PeerScoringManager;
 import co.rsk.scoring.PeerScoringReporterService;
@@ -92,23 +152,56 @@ import co.rsk.trie.MultiTrieStore;
 import co.rsk.trie.TrieStore;
 import co.rsk.trie.TrieStoreImpl;
 import co.rsk.util.RskCustomCache;
-import co.rsk.validators.*;
+import co.rsk.validators.BlockDifficultyRule;
+import co.rsk.validators.BlockHeaderCompositeRule;
+import co.rsk.validators.BlockHeaderParentCompositeRule;
+import co.rsk.validators.BlockHeaderParentDependantValidationRule;
+import co.rsk.validators.BlockHeaderValidationRule;
+import co.rsk.validators.BlockParentCompositeRule;
+import co.rsk.validators.BlockParentDependantValidationRule;
+import co.rsk.validators.BlockParentGasLimitRule;
+import co.rsk.validators.BlockParentNumberRule;
+import co.rsk.validators.BlockRootValidationRule;
+import co.rsk.validators.BlockTimeStampValidationRule;
+import co.rsk.validators.BlockTxsFieldsValidationRule;
+import co.rsk.validators.BlockTxsMaxGasPriceRule;
+import co.rsk.validators.BlockTxsValidationRule;
+import co.rsk.validators.BlockUnclesHashValidationRule;
+import co.rsk.validators.BlockUnclesValidationRule;
+import co.rsk.validators.BlockValidationRule;
+import co.rsk.validators.BlockValidator;
+import co.rsk.validators.BlockValidatorRule;
+import co.rsk.validators.ExtraDataRule;
+import co.rsk.validators.ForkDetectionDataRule;
+import co.rsk.validators.GasLimitRule;
+import co.rsk.validators.PrevMinGasPriceRule;
+import co.rsk.validators.ProofOfWorkRule;
+import co.rsk.validators.RemascValidationRule;
+import co.rsk.validators.SyncBlockValidatorRule;
+import co.rsk.validators.TxsMinGasPriceRule;
+import co.rsk.validators.ValidGasUsedRule;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.annotations.VisibleForTesting;
-import com.typesafe.config.Config;
-import com.typesafe.config.ConfigList;
-import com.typesafe.config.ConfigObject;
 import org.ethereum.config.Constants;
 import org.ethereum.config.SystemProperties;
 import org.ethereum.config.blockchain.upgrades.ActivationConfig;
 import org.ethereum.config.blockchain.upgrades.ConsensusRule;
-import org.ethereum.core.*;
+import org.ethereum.core.BlockFactory;
+import org.ethereum.core.BlockTxSignatureCache;
+import org.ethereum.core.Blockchain;
+import org.ethereum.core.Genesis;
+import org.ethereum.core.ReceivedTxSignatureCache;
+import org.ethereum.core.TransactionPool;
 import org.ethereum.core.genesis.BlockChainLoader;
 import org.ethereum.core.genesis.GenesisLoader;
 import org.ethereum.core.genesis.GenesisLoaderImpl;
 import org.ethereum.crypto.ECKey;
 import org.ethereum.crypto.signature.Secp256k1;
-import org.ethereum.datasource.*;
+import org.ethereum.datasource.CacheSnapshotHandler;
+import org.ethereum.datasource.DataSourceWithCache;
+import org.ethereum.datasource.DbKind;
+import org.ethereum.datasource.KeyValueDataSource;
+import org.ethereum.datasource.KeyValueDataSourceUtils;
 import org.ethereum.db.IndexedBlockStore;
 import org.ethereum.db.ReceiptStore;
 import org.ethereum.db.ReceiptStoreImplV2;
@@ -125,7 +218,11 @@ import org.ethereum.net.client.PeerClient;
 import org.ethereum.net.eth.message.Eth62MessageFactory;
 import org.ethereum.net.message.StaticMessages;
 import org.ethereum.net.rlpx.Node;
-import org.ethereum.net.server.*;
+import org.ethereum.net.server.ChannelManager;
+import org.ethereum.net.server.ChannelManagerImpl;
+import org.ethereum.net.server.EthereumChannelInitializer;
+import org.ethereum.net.server.PeerServer;
+import org.ethereum.net.server.PeerServerImpl;
 import org.ethereum.rpc.Web3;
 import org.ethereum.solidity.compiler.SolidityCompiler;
 import org.ethereum.sync.SyncPool;
@@ -141,14 +238,28 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
-import java.io.*;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStreamWriter;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Clock;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Properties;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -2155,7 +2266,7 @@ public class RskContext implements NodeContext, NodeBootstrapper {
                             rskSystemProperties.minerMinGasPrice(),
                             rskSystemProperties.minerStableGasPriceMinStableGasPrice(),
                             rskSystemProperties.minerStableGasPriceRefreshRate(),
-                            getConversionRateProviders(rskSystemProperties.minerStableGasPriceSources())
+                            rskSystemProperties.minerStableGasPriceSources()
                     ),
                     rskSystemProperties.getNetworkConstants().getUncleListLimit(),
                     rskSystemProperties.getNetworkConstants().getUncleGenerationLimit(),
@@ -2170,43 +2281,6 @@ public class RskContext implements NodeContext, NodeBootstrapper {
         }
 
         return miningConfig;
-    }
-
-    private @Nonnull List<ConversionRateProvider> getConversionRateProviders(ConfigList minerStableGasPriceSources) {
-        return minerStableGasPriceSources
-                .stream()
-                .map(source -> createConversionRateProvider((ConfigObject) source))
-                .collect(Collectors.toList());
-    }
-
-    private @Nullable ConversionRateProvider createConversionRateProvider(ConfigObject sourceConfigObject) {
-        StableMinGasPriceSourceConfig sourceConfig = new StableMinGasPriceSourceConfig(
-                sourceConfigObject
-        );
-
-        String type = sourceConfig.sourceType();
-        if (type == null) {
-            throw new IllegalArgumentException("Missing 'type' for a source in miner stableGasPrice");
-        }
-        if (type.equalsIgnoreCase("HTTP_GET")) {
-            return new HttpGetProvider(
-                    sourceConfig.sourceUrl(),
-                    sourceConfig.sourceApiKey(),
-                    sourceConfig.sourceJsonPath(),
-                    sourceConfig.sourceTimeout()
-            );
-        }
-        if (type.equalsIgnoreCase("ETH_CALL")) {
-            return new EthCallProvider(
-                    sourceConfig.sourceContract(),
-                    sourceConfig.sourceContractMethod(),
-                    sourceConfig.sourceContractMethodParams()
-//                    getEthModule() // FIXME: this creates halting problem
-            );
-        }
-        logger.error("Unknown 'type' in miner stableGasPrice providers: {}", type);
-
-        return null;
     }
 
     private GasLimitCalculator getGasLimitCalculator() {

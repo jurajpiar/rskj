@@ -27,7 +27,7 @@ public class StableMinGasPriceSourceConfig
     }
 
     public String sourceJsonPath() {
-        return sourceConfig.getString("jsonPath");
+        return sourceConfig.getString("path");
     }
 
     public Duration sourceTimeout() {

@@ -1,5 +1,7 @@
 package co.rsk.mine.minGasPrice;
 
+import co.rsk.config.StableMinGasPriceSourceConfig;
+
 import java.time.Duration;
 
 public class HttpGetProvider extends ConversionRateProvider {
@@ -7,6 +9,15 @@ public class HttpGetProvider extends ConversionRateProvider {
     private final String apiKey;
     private final String jsonPath;
     private final Duration timeout;
+
+    public HttpGetProvider(StableMinGasPriceSourceConfig sourceConfig) {
+        this(
+                sourceConfig.sourceUrl(),
+                sourceConfig.sourceApiKey(),
+                sourceConfig.sourceJsonPath(),
+                sourceConfig.sourceTimeout()
+        );
+    }
 
     public HttpGetProvider(
             String url, String apiKey,

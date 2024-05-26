@@ -1,6 +1,7 @@
 package co.rsk.mine.minGasPrice;
 
 import co.rsk.core.Coin;
+import com.typesafe.config.ConfigList;
 
 import java.time.Duration;
 import java.util.List;
@@ -17,13 +18,13 @@ public class MinGasPriceProvider {
             long minFixedGasPriceTarget,
             long minStableGasPrice,
             Duration refreshRate,
-            List<ConversionRateProvider> providers
+            ConfigList exchangeRateSources
     ) {
         this.enabled = isStableMinGasPrice;
         this.minFixedGasPriceTarget = minFixedGasPriceTarget;
         this.minStableGasPrice = minStableGasPrice;
         this.refreshRate = refreshRate;
-        this.providers = providers;
+        this.providers = ConversionRateProviderFactory.getProvidersFromSourceConfig(exchangeRateSources);
     }
 
     public MinGasPriceProvider(long minFixedGasPriceTarget) {
