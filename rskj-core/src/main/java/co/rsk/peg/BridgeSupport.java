@@ -717,6 +717,17 @@ public class BridgeSupport {
 
         logger.debug("[executePegIn] [btcTx:{}] Is a peg-in from a {} sender", btcTx.getHash(), senderBtcAddressType);
         this.transferTo(peginInformation.getRskDestinationAddress(), amountInWeis);
+        // Native-intent PoC (A): record (destination, amount) per btc txid so the settlement
+        // contract can verify and release exactly the pegged-in input. 64 bytes = destWord ++ amountWord.
+        {
+            org.ethereum.vm.DataWord peginDestWord = org.ethereum.vm.DataWord.valueOf(rskDestinationAddress.getBytes());
+            org.ethereum.vm.DataWord peginAmtWord = org.ethereum.vm.DataWord.valueOf(amountInWeis.asBigInteger().toByteArray());
+            byte[] peginInfoValue = new byte[64];
+            System.arraycopy(peginDestWord.getData(), 0, peginInfoValue, 0, 32);
+            System.arraycopy(peginAmtWord.getData(), 0, peginInfoValue, 32, 32);
+            rskRepository.addStorageBytes(PrecompiledContracts.BRIDGE_ADDR,
+                org.ethereum.vm.DataWord.fromLongString("intentPeginInfo-" + btcTx.getHash().toString()), peginInfoValue);
+        }
         logger.info(
             "[executePegIn] Transferring from BTC address {}. RSK address: {}. Amount: {}",
             senderBtcAddress,
@@ -2296,6 +2307,13 @@ public class BridgeSupport {
     public Long getBtcTxHashProcessedHeight(Sha256Hash btcTxHash) throws IOException {
         // Return -1 if the transaction hasn't been processed
         return provider.getHeightIfBtcTxhashIsAlreadyProcessed(btcTxHash).orElse(-1L);
+    }
+
+    // Native-intent PoC (A): per-txid (destination, amount) recorded at peg-in. 64 bytes, or empty.
+    public byte[] getPeginInfo(byte[] btcTxid) {
+        byte[] v = rskRepository.getStorageBytes(PrecompiledContracts.BRIDGE_ADDR,
+            org.ethereum.vm.DataWord.fromLongString("intentPeginInfo-" + org.ethereum.util.ByteUtil.toHexString(btcTxid)));
+        return v == null ? new byte[0] : v;
     }
 
     /**

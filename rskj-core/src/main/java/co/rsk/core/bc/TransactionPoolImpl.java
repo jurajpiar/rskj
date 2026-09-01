@@ -258,6 +258,20 @@ public class TransactionPoolImpl implements TransactionPool {
         RepositorySnapshot currentRepository = getCurrentRepository();
         TransactionValidationResult validationResult = shouldAcceptTx(tx, currentRepository);
 
+        // Native-intent PoC: pre-inclusion validity (irreducible claim 2), behind the activation rule.
+        if (tx.isNativeIntent()) {
+            if (!config.getActivationConfig().isActive(org.ethereum.config.blockchain.upgrades.ConsensusRule.RSKIPINTENT, getBestBlock().getNumber())) {
+                return TransactionPoolAddResult.withError("native intents are not active yet");
+            }
+            co.rsk.intent.IntentAdmission.Result intentResult = co.rsk.intent.IntentAdmission.check(
+                    tx, currentRepository, getBestBlock().getNumber(),
+                    co.rsk.intent.IntentConstants.requireBtcTicket(),
+                    co.rsk.intent.IntentConstants.maxExpirySpan());
+            if (!intentResult.ok()) {
+                return TransactionPoolAddResult.withError(intentResult.error);
+            }
+        }
+
 
         if (!validationResult.transactionIsValid()) {
             return TransactionPoolAddResult.withError(validationResult.getErrorMessage());

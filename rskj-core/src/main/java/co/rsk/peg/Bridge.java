@@ -102,6 +102,7 @@ public class Bridge extends PrecompiledContracts.PrecompiledContract {
     public static final CallTransaction.Function GET_STATE_FOR_SVP_CLIENT = BridgeMethods.GET_STATE_FOR_SVP_CLIENT.getFunction();
     // Returns a BridgeState encoded in RLP
     public static final CallTransaction.Function GET_STATE_FOR_DEBUGGING = BridgeMethods.GET_STATE_FOR_DEBUGGING.getFunction();
+    public static final CallTransaction.Function GET_PEGIN_INFO = BridgeMethods.GET_PEGIN_INFO.getFunction(); // Native-intent PoC (A)
     // Return the bitcoin blockchain best chain height know by the bridge contract
     public static final CallTransaction.Function GET_BTC_BLOCKCHAIN_BEST_CHAIN_HEIGHT = BridgeMethods.GET_BTC_BLOCKCHAIN_BEST_CHAIN_HEIGHT.getFunction();
     // Returns an array of block hashes known by the bridge contract. Federators can use this to find what is the latest block in the mainchain the bridge has.
@@ -672,6 +673,14 @@ public class Bridge extends PrecompiledContracts.PrecompiledContract {
         } catch (Exception e) {
             logger.warn("Exception in getStateForSvpClient", e);
             throw new VMException("Exception in getStateForSvpClient", e);
+        }
+    }
+
+    public byte[] getPeginInfo(Object[] args) throws VMException {
+        try {
+            return bridgeSupport.getPeginInfo((byte[]) args[0]);
+        } catch (Exception e) {
+            throw new VMException("Exception in getPeginInfo", e);
         }
     }
 

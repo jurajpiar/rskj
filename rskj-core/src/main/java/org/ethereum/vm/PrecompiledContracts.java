@@ -148,7 +148,8 @@ public class PrecompiledContracts {
                     new AbstractMap.SimpleEntry<>(BLAKE2F_ADDR, ConsensusRule.RSKIP153),
                     new AbstractMap.SimpleEntry<>(ENVIRONMENT_ADDR, ConsensusRule.RSKIP203),
                     new AbstractMap.SimpleEntry<>(SECP256K1_ADD_ADDR, ConsensusRule.RSKIP516),
-                    new AbstractMap.SimpleEntry<>(SECP256K1_MUL_ADDR, ConsensusRule.RSKIP516)
+                    new AbstractMap.SimpleEntry<>(SECP256K1_MUL_ADDR, ConsensusRule.RSKIP516),
+                    new AbstractMap.SimpleEntry<>(co.rsk.intent.IntentConstants.INTENT_REGISTRY_ADDR, ConsensusRule.RSKIPINTENT)
             ).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue))
     );
 
@@ -217,6 +218,11 @@ public class PrecompiledContracts {
         if (address.equals(REMASC_ADDR_DW)) {
             return new RemascContract(REMASC_ADDR, remascConfig, config.getNetworkConstants(),
                     config.getActivationConfig());
+        }
+
+        // Native-intent PoC: parse precompile, activation-gated (CONSENSUS_ENABLED_ADDRESSES).
+        if (activations.isActive(ConsensusRule.RSKIPINTENT) && address.equals(co.rsk.intent.IntentConstants.INTENT_REGISTRY_ADDR_DW)) {
+            return new co.rsk.intent.IntentRegistryContract(co.rsk.intent.IntentConstants.INTENT_REGISTRY_ADDR);
         }
 
         // TODO(mc) reuse CONSENSUS_ENABLED_ADDRESSES

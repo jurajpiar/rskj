@@ -62,7 +62,7 @@ public class BridgeRegTestConstants extends BridgeConstants {
         legacyMinimumPegoutTxValue = Coin.valueOf(500_000);
         minimumPegoutTxValue = Coin.valueOf(250_000);
 
-        minSecondsBetweenCallsReceiveHeader = 300;  // 5 minutes in seconds
+        minSecondsBetweenCallsReceiveHeader = 0;  // PoC: no throttle on regtest header relay (was 300)
 
         maxDepthBlockchainAccepted = 25;
 

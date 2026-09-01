@@ -304,6 +304,13 @@ public class Transaction {
     // "return (this.isContractCreation() ? GasCost.TRANSACTION_CREATE_CONTRACT : GasCost.TRANSACTION)
     //         + zeroVals * GasCost.TX_ZERO_DATA + nonZeroes * GasCost.TX_NO_ZERO_DATA;"
     public long transactionCost(Constants constants, ActivationConfig.ForBlock activations, SignatureCache signatureCache) {
+        // Native-intent PoC: intents are free mempool objects, never mined. Zero cost is what
+        // lets a zero-balance sender be admitted and gossiped (irreducible claim 1). Gated on the
+        // activation rule so the privilege only exists after the fork (production activation gate).
+        if (isNativeIntent() && activations.isActive(org.ethereum.config.blockchain.upgrades.ConsensusRule.RSKIPINTENT)) {
+            return 0;
+        }
+
         // Federators txs to the bridge are free during system setup
         if (BridgeUtils.isFreeBridgeTx(this, constants, activations, signatureCache)) {
             return 0;
@@ -639,6 +646,12 @@ public class Transaction {
 
     public boolean isRskNamespaceTransaction() {
         return typePrefix.isRskNamespace();
+    }
+
+    /** Native-intent PoC (m1): 0x02 || 0x49 subtype. */
+    public boolean isNativeIntent() {
+        return typePrefix.isRskNamespace()
+                && typePrefix.subtype() == co.rsk.intent.IntentConstants.INTENT_SUBTYPE;
     }
 
     public byte getRskSubtype() {

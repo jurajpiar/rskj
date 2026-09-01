@@ -539,6 +539,18 @@ public enum BridgeMethods {
         fixedPermission(true),
         CallTypeHelper.ALLOW_STATIC_CALL
     ),
+    GET_PEGIN_INFO(
+        CallTransaction.Function.fromSignature(
+            "getPeginInfo",
+            new String[]{BYTES32},
+            new String[]{BYTES}
+        ),
+        fixedCost(30_000L),
+        (BridgeMethodExecutorTyped<byte[]>) Bridge::getPeginInfo,
+        activations -> activations.isActive(RSKIPINTENT),
+        fixedPermission(false),
+        CallTypeHelper.ALLOW_STATIC_CALL
+    ),
     GET_STATE_FOR_DEBUGGING(
         CallTransaction.Function.fromSignature(
             "getStateForDebugging",

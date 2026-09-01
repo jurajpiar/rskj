@@ -149,6 +149,8 @@ public class MinerUtils {
 
     public List<org.ethereum.core.Transaction> getAllTransactions(TransactionPool transactionPool, SignatureCache signatureCache, List<Transaction> txsToRemove) {
         List<Transaction> txs = new ArrayList<>(transactionPool.getPendingTransactions());
+        // Native-intent PoC (m1): intents live in the mempool as discovery objects only; never mined standalone.
+        txs.removeIf(t -> t.isNativeIntent());
         return PendingState.sortByPriceTakingIntoAccountSenderAndNonce(txs, signatureCache, txsToRemove);
     }
 
