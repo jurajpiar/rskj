@@ -282,4 +282,64 @@ class PegUtilsEvaluatePeginTest {
 
         assertEquals(PeginProcessAction.REGISTER, peginEvaluationResult.getPeginProcessAction());
     }
+
+    // --- Peg-in instructions v3 PoC: REQUIRE_CODE evaluation ---
+
+    private PeginInformation peginInformationV3(boolean requiresCode) throws PeginInstructionsException {
+        PeginInformation peginInformation = mock(PeginInformation.class);
+        when(peginInformation.getProtocolVersion()).thenReturn(3);
+        when(peginInformation.requiresCodeAtDestination()).thenReturn(requiresCode);
+        when(peginInformation.getRskDestinationAddress()).thenReturn(new co.rsk.core.RskAddress(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}));
+        when(peginInformation.getBtcRefundAddress()).thenReturn(BitcoinTestUtils.createP2PKHAddress(networkParameters, "v3refund"));
+        return peginInformation;
+    }
+
+    private BtcTransaction validPeginTx() {
+        BtcTransaction btcTx = new BtcTransaction(networkParameters);
+        btcTx.addOutput(minimumPegInTxValue, activeFederation.getAddress());
+        return btcTx;
+    }
+
+    @Test
+    void evaluatePegin_v3_flagClear_registers_withoutCodeLookup() throws PeginInstructionsException {
+        PeginEvaluationResult result = PegUtils.evaluatePegin(validPeginTx(), peginInformationV3(false), minimumPegInTxValue, activeFedWallet, activations,
+            address -> { throw new AssertionError("code must not be looked up when the flag is clear"); });
+
+        assertEquals(PeginProcessAction.REGISTER, result.getPeginProcessAction());
+        assertTrue(result.getRejectedPeginReason().isEmpty());
+    }
+
+    @Test
+    void evaluatePegin_v3_requireCode_destinationHasCode_registers() throws PeginInstructionsException {
+        PeginEvaluationResult result = PegUtils.evaluatePegin(validPeginTx(), peginInformationV3(true), minimumPegInTxValue, activeFedWallet, activations, address -> true);
+
+        assertEquals(PeginProcessAction.REGISTER, result.getPeginProcessAction());
+    }
+
+    @Test
+    void evaluatePegin_v3_requireCode_destinationHasNoCode_refunds() throws PeginInstructionsException {
+        PeginEvaluationResult result = PegUtils.evaluatePegin(validPeginTx(), peginInformationV3(true), minimumPegInTxValue, activeFedWallet, activations, address -> false);
+
+        assertEquals(PeginProcessAction.REFUND, result.getPeginProcessAction());
+        assertEquals(RejectedPeginReason.PEGIN_DESTINATION_HAS_NO_CODE, result.getRejectedPeginReason().orElseThrow());
+    }
+
+    @Test
+    void evaluatePegin_v3_requireCode_belowMinimum_isInvalidAmount_beforeCodeCheck() throws PeginInstructionsException {
+        BtcTransaction btcTx = new BtcTransaction(networkParameters);
+        btcTx.addOutput(minimumPegInTxValue.subtract(Coin.SATOSHI), activeFederation.getAddress());
+
+        PeginEvaluationResult result = PegUtils.evaluatePegin(btcTx, peginInformationV3(true), minimumPegInTxValue, activeFedWallet, activations,
+            address -> { throw new AssertionError("minimum check precedes the code check"); });
+
+        assertEquals(PeginProcessAction.NO_REFUND, result.getPeginProcessAction());
+        assertEquals(RejectedPeginReason.INVALID_AMOUNT, result.getRejectedPeginReason().orElseThrow());
+    }
+
+    @Test
+    void evaluatePegin_legacySignature_throwsIfCodeLookupNeeded() throws PeginInstructionsException {
+        PeginInformation peginInformation = peginInformationV3(true);
+        BtcTransaction btcTx = validPeginTx();
+        assertThrows(IllegalStateException.class, () -> PegUtils.evaluatePegin(btcTx, peginInformation, minimumPegInTxValue, activeFedWallet, activations));
+    }
 }
