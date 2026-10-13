@@ -244,8 +244,6 @@ public final class PegTestUtils {
         PeginRefundScriptType type = refund.isP2SHAddress() ? PeginRefundScriptType.P2SH : PeginRefundScriptType.P2PKH;
         return createOpReturnScriptForRskV3(rskDestinationAddress, flags, Optional.of(type), refund.getHash160());
     }
-        return createOpReturnScriptForRskWithCustomPayload(PeginInstructionsVersion3.PROTOCOL_VERSION, payload);
-    }
 
     public static Script createOpReturnScriptForRskWithCustomPayload(int protocolVersion, byte[] customPayload) {
         int index = 0;
