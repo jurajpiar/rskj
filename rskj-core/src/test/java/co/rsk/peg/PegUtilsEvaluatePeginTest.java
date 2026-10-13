@@ -291,7 +291,9 @@ class PegUtilsEvaluatePeginTest {
         when(peginInformation.getProtocolVersion()).thenReturn(3);
         when(peginInformation.requiresCodeAtDestination()).thenReturn(requiresCode);
         when(peginInformation.getRskDestinationAddress()).thenReturn(new co.rsk.core.RskAddress(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}));
-        when(peginInformation.getBtcRefundAddress()).thenReturn(BitcoinTestUtils.createP2PKHAddress(networkParameters, "v3refund"));
+        co.rsk.bitcoinj.core.Address refundAddress = BitcoinTestUtils.createP2PKHAddress(networkParameters, "v3refund");
+        when(peginInformation.getBtcRefundAddress()).thenReturn(refundAddress);
+        when(peginInformation.getBtcRefundScript()).thenReturn(ScriptBuilder.createOutputScript(refundAddress));
         return peginInformation;
     }
 
