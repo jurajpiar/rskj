@@ -130,8 +130,11 @@ public class PeginInformation {
         // reject it before recording its version, exactly as nodes without this code do.
         if (peginInstructions.getProtocolVersion() == PeginInstructionsVersion2.PROTOCOL_VERSION
             && !activations.isActive(ConsensusRule.RSKIP_PEGIN_INSTRUCTIONS_V2)) {
-        // Before activation a version-3 payload must be indistinguishable from an unknown version:
-        // reject it before recording its version, exactly as nodes without this code do.
+            String message = String.format("Invalid protocol version: %d", peginInstructions.getProtocolVersion());
+            logger.warn("[parseFromPeginInstructions] {}", message);
+            throw new PeginInstructionsException(message);
+        }
+        // Likewise for version 3.
         if (peginInstructions.getProtocolVersion() == PeginInstructionsVersion3.PROTOCOL_VERSION
             && !activations.isActive(ConsensusRule.RSKIP_PEGIN_INSTRUCTIONS_V3)) {
             String message = String.format("Invalid protocol version: %d", peginInstructions.getProtocolVersion());
@@ -152,6 +155,7 @@ public class PeginInformation {
             case PeginInstructionsVersion2.PROTOCOL_VERSION:
                 PeginInstructionsVersion2 peginInstructionsV2 = (PeginInstructionsVersion2) peginInstructions;
                 parseFromPeginInstructionsVersion2(peginInstructionsV2);
+                break;
             case PeginInstructionsVersion3.PROTOCOL_VERSION:
                 PeginInstructionsVersion3 peginInstructionsV3 = (PeginInstructionsVersion3) peginInstructions;
                 parseFromPeginInstructionsVersion3(peginInstructionsV3);
@@ -182,13 +186,17 @@ public class PeginInformation {
         // Witness-program refunds have no Address representation; only legacy types set it
         this.btcRefundAddress = peginInstructions.getBtcRefundAddress().orElse(null);
         logger.trace("[parseFromPeginInstructionsVersion2] BTC refund script: {}", this.btcRefundScript);
+    }
+
     private void parseFromPeginInstructionsVersion3(PeginInstructionsVersion3 peginInstructions) {
         this.requiresCodeAtDestination = peginInstructions.requiresCode();
-        Optional<Address> btcRefundAddressOptional = peginInstructions.getBtcRefundAddress();
-        if (btcRefundAddressOptional.isPresent()) {
-            this.btcRefundAddress = btcRefundAddressOptional.get();
-        }
-        logger.trace("[parseFromPeginInstructionsVersion3] Requires code: {}. BTC refund address: {}",
-            this.requiresCodeAtDestination, this.btcRefundAddress);
+        Optional<Script> btcRefundScriptOptional = peginInstructions.getBtcRefundScript();
+        if (btcRefundScriptOptional.isPresent()) {
+            // Encoded as in version 2: witness-program refunds have no Address form, only legacy types set it
+            this.btcRefundScript = btcRefundScriptOptional.get();
+            this.btcRefundAddress = peginInstructions.getBtcRefundAddress().orElse(null);
+        } // else keep the sender-derived refund, if any, as versions 1 and 2 do
+        logger.trace("[parseFromPeginInstructionsVersion3] Requires code: {}. BTC refund script: {}",
+            this.requiresCodeAtDestination, this.btcRefundScript);
     }
 }

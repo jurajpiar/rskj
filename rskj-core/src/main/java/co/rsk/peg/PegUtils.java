@@ -292,9 +292,13 @@ public class PegUtils {
             logger.debug("[evaluatePeginVersion3] Destination {} has code, registering", destination);
             return new PeginEvaluationResult(PeginProcessAction.REGISTER);
         }
-        // The refund address is mandatory with REQUIRE_CODE (enforced at parse time), so this is always refundable
-        logger.debug("[evaluatePeginVersion3] Destination {} has no code, refunding", destination);
-        return new PeginEvaluationResult(PeginProcessAction.REFUND, PEGIN_DESTINATION_HAS_NO_CODE);
+        // The refund output is mandatory with REQUIRE_CODE (enforced at parse time), so this is always refundable;
+        // the guard only documents the invariant
+        PeginProcessAction action = peginInformation.getBtcRefundScript() != null
+            ? PeginProcessAction.REFUND
+            : PeginProcessAction.NO_REFUND;
+        logger.debug("[evaluatePeginVersion3] Destination {} has no code, {}", destination, action);
+        return new PeginEvaluationResult(action, PEGIN_DESTINATION_HAS_NO_CODE);
     }
 
     private static PeginEvaluationResult evaluateLegacyPegin(BtcTransaction btcTx, Wallet fedWallet, TxSenderAddressType senderAddressType)  {

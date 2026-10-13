@@ -12,6 +12,7 @@ import java.util.Optional;
 import org.bouncycastle.util.encoders.Hex;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class PeginInstructionsVersion3Test {
@@ -86,19 +87,45 @@ class PeginInstructionsVersion3Test {
         assertThrows(PeginInstructionsParseException.class, () -> parse(withoutRefund));
     }
 
+    @ParameterizedTest
+    @EnumSource(PeginRefundScriptType.class)
+    void parse_requireCode_withAnyV2RefundType_buildsTheOutputScript(PeginRefundScriptType type) throws PeginInstructionsParseException {
+        byte[] program = new byte[type.getProgramLength()];
+        java.util.Arrays.fill(program, (byte) 0xab);
+        byte[] payload = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(type), program));
+        assertEquals(27 + type.getProgramLength(), payload.length);
+
+        PeginInstructionsVersion3 instructions = parse(payload);
+
+        assertTrue(instructions.requiresCode());
+        assertEquals(Optional.of(type), instructions.getBtcRefundScriptType());
+        assertEquals(Optional.of(type.buildOutputScript(program)), instructions.getBtcRefundScript());
+        assertEquals(type.isLegacy(), instructions.getBtcRefundAddress().isPresent(), "only legacy types have an Address form");
+    }
+
     @Test
     void parse_unknownRefundType_isParseFailure() {
         byte[] payload = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(p2pkhRefund)));
-        for (int type : new int[]{0x00, 0x03, 0x04, 0x05, 0xff}) {
+        for (int type : new int[]{0x00, 0x06, 0xff}) {
             payload[26] = (byte) type;
             assertThrows(PeginInstructionsParseException.class, () -> parse(payload), "type " + type);
         }
     }
 
+    @Test
+    void parse_programLengthMismatch_isParseFailure() {
+        // a 20-byte program declared as taproot (32) and a 32-byte one declared as P2WPKH (20)
+        byte[] short20 = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, 0x00, Optional.of(PeginRefundScriptType.P2WPKH), new byte[20]));
+        short20[26] = (byte) PeginRefundScriptType.P2TR.getTypeByte();
+        assertThrows(PeginInstructionsParseException.class, () -> parse(short20));
+        byte[] long32 = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, 0x00, Optional.of(PeginRefundScriptType.P2TR), new byte[32]));
+        long32[26] = (byte) PeginRefundScriptType.P2WPKH.getTypeByte();
+        assertThrows(PeginInstructionsParseException.class, () -> parse(long32));
+    }
+
     @ParameterizedTest
-    @ValueSource(ints = {5, 25, 27, 46, 48, 58, 59, 80})
+    @ValueSource(ints = {5, 25, 27, 46, 48, 58, 60, 80})
     void parse_invalidLengths_areParseFailure(int length) {
-        // 59 bytes (a 32-byte program) is valid in the draft but out of scope for this PoC, which keeps the v1 refund types
         assertThrows(PeginInstructionsParseException.class, () -> parse(new byte[length]));
     }
 }

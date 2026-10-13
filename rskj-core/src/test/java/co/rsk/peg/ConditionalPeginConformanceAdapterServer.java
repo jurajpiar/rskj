@@ -198,16 +198,16 @@ public class ConditionalPeginConformanceAdapterServer {
                 PeginInstructions instructions = parseWithProvider(payload).orElseThrow(() -> new PeginInstructionsException("no RSKT output"));
                 reply.put("ok", true);
                 reply.put("destination_hex", Hex.toHexString(instructions.getRskDestinationAddress().getBytes()));
-                Optional<Address> refund = Optional.empty();
+                Optional<Script> refundScript = Optional.empty();
                 if (instructions instanceof PeginInstructionsVersion3 v3) {
                     reply.put("flags", v3.getFlags());
-                    refund = v3.getBtcRefundAddress();
+                    refundScript = v3.getBtcRefundScript(); // v2 encoding: witness programs included
                 } else if (instructions instanceof PeginInstructionsVersion1 v1) {
                     reply.putNull("flags");
-                    refund = v1.getBtcRefundAddress();
+                    refundScript = v1.getBtcRefundAddress().map(ScriptBuilder::createOutputScript);
                 }
-                if (refund.isPresent()) {
-                    reply.put("refund_script_hex", Hex.toHexString(ScriptBuilder.createOutputScript(refund.get()).getProgram()));
+                if (refundScript.isPresent()) {
+                    reply.put("refund_script_hex", Hex.toHexString(refundScript.get().getProgram()));
                 } else {
                     reply.putNull("refund_script_hex");
                 }

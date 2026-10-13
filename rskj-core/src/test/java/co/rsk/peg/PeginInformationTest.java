@@ -526,6 +526,7 @@ class PeginInformationTest {
         when(v3Mock.getProtocolVersion()).thenReturn(3);
         when(v3Mock.getRskDestinationAddress()).thenReturn(destination);
         when(v3Mock.requiresCode()).thenReturn(true);
+        when(v3Mock.getBtcRefundScript()).thenReturn(Optional.of(co.rsk.bitcoinj.script.ScriptBuilder.createOutputScript(refund)));
         when(v3Mock.getBtcRefundAddress()).thenReturn(Optional.of(refund));
 
         PeginInformation peginInformation = parseV3(btcTx, v3Mock, true);
@@ -534,7 +535,28 @@ class PeginInformationTest {
         Assertions.assertEquals(destination, peginInformation.getRskDestinationAddress());
         Assertions.assertTrue(peginInformation.requiresCodeAtDestination());
         Assertions.assertEquals(refund, peginInformation.getBtcRefundAddress(), "payload refund overrides the sender-derived one");
+        Assertions.assertEquals(co.rsk.bitcoinj.script.ScriptBuilder.createOutputScript(refund), peginInformation.getBtcRefundScript());
         Assertions.assertNotEquals(peginInformation.getSenderBtcAddress(), peginInformation.getBtcRefundAddress());
+    }
+
+    @Test
+    void parse_fromPeginInstructionsV3_requireCode_taprootRefund_setsScriptButNoAddress() throws PeginInstructionsException {
+        BtcTransaction btcTx = new BtcTransaction(networkParameters);
+        byte[] program = new byte[32];
+        java.util.Arrays.fill(program, (byte) 0x55);
+        co.rsk.bitcoinj.script.Script p2trScript = co.rsk.peg.pegininstructions.PeginRefundScriptType.P2TR.buildOutputScript(program);
+        PeginInstructionsVersion3 v3Mock = mock(PeginInstructionsVersion3.class);
+        when(v3Mock.getProtocolVersion()).thenReturn(3);
+        when(v3Mock.getRskDestinationAddress()).thenReturn(new RskAddress(new byte[20]));
+        when(v3Mock.requiresCode()).thenReturn(true);
+        when(v3Mock.getBtcRefundScript()).thenReturn(Optional.of(p2trScript));
+        when(v3Mock.getBtcRefundAddress()).thenReturn(Optional.empty());
+
+        PeginInformation peginInformation = parseV3(btcTx, v3Mock, true);
+
+        Assertions.assertTrue(peginInformation.requiresCodeAtDestination());
+        Assertions.assertEquals(p2trScript, peginInformation.getBtcRefundScript());
+        Assertions.assertNull(peginInformation.getBtcRefundAddress(), "a taproot refund has no Address form");
     }
 
     @Test
@@ -544,7 +566,7 @@ class PeginInformationTest {
         when(v3Mock.getProtocolVersion()).thenReturn(3);
         when(v3Mock.getRskDestinationAddress()).thenReturn(new RskAddress(new byte[20]));
         when(v3Mock.requiresCode()).thenReturn(false);
-        when(v3Mock.getBtcRefundAddress()).thenReturn(Optional.empty());
+        when(v3Mock.getBtcRefundScript()).thenReturn(Optional.empty());
 
         PeginInformation peginInformation = parseV3(btcTx, v3Mock, true);
 

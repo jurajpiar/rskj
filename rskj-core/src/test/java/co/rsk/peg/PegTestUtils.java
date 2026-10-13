@@ -214,18 +214,36 @@ public final class PegTestUtils {
     }
 
     /**
-     * Builds a version-3 peg-in instructions OP_RETURN script: RSKT | 0x03 | rsk address | flags | [type | hash160].
+     * Builds a version-3 peg-in instructions OP_RETURN script: RSKT | 0x03 | rsk address | flags | [type | program].
+     * The refund is encoded as in version 2.
      */
-    public static Script createOpReturnScriptForRskV3(RskAddress rskDestinationAddress, int flags, Optional<Address> btcRefundAddress) {
+    public static Script createOpReturnScriptForRskV3(
+        RskAddress rskDestinationAddress,
+        int flags,
+        Optional<PeginRefundScriptType> refundScriptType,
+        byte[] refundProgram
+    ) {
         byte[] destination = rskDestinationAddress.getBytes();
-        byte[] payload = new byte[destination.length + 1 + (btcRefundAddress.isPresent() ? 21 : 0)];
+        int payloadLength = destination.length + 1 + (refundScriptType.isPresent() ? 1 + refundProgram.length : 0);
+        byte[] payload = new byte[payloadLength];
         System.arraycopy(destination, 0, payload, 0, destination.length);
         payload[destination.length] = (byte) flags;
-        if (btcRefundAddress.isPresent()) {
-            Address refund = btcRefundAddress.get();
-            payload[destination.length + 1] = (byte) (refund.isP2SHAddress() ? 2 : 1);
-            System.arraycopy(refund.getHash160(), 0, payload, destination.length + 2, 20);
+        if (refundScriptType.isPresent()) {
+            payload[destination.length + 1] = (byte) refundScriptType.get().getTypeByte();
+            System.arraycopy(refundProgram, 0, payload, destination.length + 2, refundProgram.length);
         }
+        return createOpReturnScriptForRskWithCustomPayload(PeginInstructionsVersion3.PROTOCOL_VERSION, payload);
+    }
+
+    /** Convenience: a version-3 script whose refund is a legacy (P2PKH/P2SH) address, or none. */
+    public static Script createOpReturnScriptForRskV3(RskAddress rskDestinationAddress, int flags, Optional<Address> btcRefundAddress) {
+        if (btcRefundAddress.isEmpty()) {
+            return createOpReturnScriptForRskV3(rskDestinationAddress, flags, Optional.empty(), new byte[0]);
+        }
+        Address refund = btcRefundAddress.get();
+        PeginRefundScriptType type = refund.isP2SHAddress() ? PeginRefundScriptType.P2SH : PeginRefundScriptType.P2PKH;
+        return createOpReturnScriptForRskV3(rskDestinationAddress, flags, Optional.of(type), refund.getHash160());
+    }
         return createOpReturnScriptForRskWithCustomPayload(PeginInstructionsVersion3.PROTOCOL_VERSION, payload);
     }
 

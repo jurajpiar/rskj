@@ -3795,6 +3795,62 @@ class BridgeSupportRegisterBtcTransactionTest {
         assertPeginIsRejectedAndRefunded(allActivations, btcTransaction, Coin.COIN, PEGIN_DESTINATION_HAS_NO_CODE);
     }
 
+    private BtcTransaction buildPeginV3Tx(RskAddress destination, int flags, PeginRefundScriptType refundType, byte[] program, boolean segwitInput, BtcECKey senderKey) {
+        BtcTransaction btcTransaction = new BtcTransaction(btcMainnetParams);
+        btcTransaction.addInput(BitcoinTestUtils.createHash(1), FIRST_OUTPUT_INDEX, ScriptBuilder.createInputScript(null, senderKey));
+        btcTransaction.addOutput(Coin.COIN, activeFederation.getAddress());
+        btcTransaction.addOutput(Coin.ZERO, PegTestUtils.createOpReturnScriptForRskV3(destination, flags, Optional.of(refundType), program));
+        if (segwitInput) {
+            TransactionWitness txWitness = new TransactionWitness(1);
+            txWitness.setPush(0, new byte[]{0x1});
+            btcTransaction.setWitness(0, txWitness);
+        }
+        return btcTransaction;
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = PeginRefundScriptType.class, names = {"P2WPKH", "P2WSH", "P2TR"})
+    void pegin_v3_requireCode_witnessRefund_destinationWithoutCode_isRefundedToTheWitnessProgram(PeginRefundScriptType refundType) throws BlockStoreException, BridgeIllegalArgumentException, IOException {
+        // The deposit comes from a native-segwit input, so no sender address can be derived: without the payload's
+        // refund output this peg-in would be unrefundable
+        btcLockSenderProvider = mock(BtcLockSenderProvider.class);
+        when(btcLockSenderProvider.tryGetBtcLockSender(any())).thenReturn(Optional.empty());
+        byte[] program = filledProgram(refundType.getProgramLength(), 0xcd);
+        BtcTransaction btcTransaction = buildPeginV3Tx(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, refundType, program, true, new BtcECKey());
+        int height = heightAtWhichToStartUsingPegoutIndex;
+        createPmtAndMockBlockStore(btcTransaction, height);
+        PartialMerkleTree pmtWithWitness = createPmtWithWitness(btcTransaction);
+        BridgeSupport bridgeSupport = buildBridgeSupport(allActivations);
+        when(repository.getCode(destinationRskAddress)).thenReturn(new byte[0]);
+
+        bridgeSupport.registerBtcTransaction(rskTx, btcTransaction.bitcoinSerialize(), height, pmtWithWitness.bitcoinSerialize());
+
+        verify(bridgeEventLogger, times(1)).logRejectedPegin(btcTransaction, PEGIN_DESTINATION_HAS_NO_CODE);
+        verify(bridgeEventLogger, never()).logNonRefundablePegin(any(), any());
+        verify(bridgeEventLogger, never()).logPeginBtc(any(), any(), any(), anyInt());
+        assertEquals(1, pegoutsWaitingForConfirmations.getEntries().size());
+        BtcTransaction release = pegoutsWaitingForConfirmations.getEntries().iterator().next().getBtcTransaction();
+        assertEquals(1, release.getOutputs().size());
+        assertEquals(refundType.buildOutputScript(program), release.getOutput(0).getScriptPubKey());
+        assertTrue(release.getOutput(0).getValue().isLessThan(Coin.COIN));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = PeginRefundScriptType.class, names = {"P2WPKH", "P2WSH", "P2TR"})
+    void pegin_v3_requireCode_witnessRefund_destinationWithCode_isCredited(PeginRefundScriptType refundType) throws BlockStoreException, BridgeIllegalArgumentException, IOException {
+        byte[] program = filledProgram(refundType.getProgramLength(), 0xcd);
+        BtcTransaction btcTransaction = buildPeginV3Tx(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, refundType, program, true, new BtcECKey());
+        int height = heightAtWhichToStartUsingPegoutIndex;
+        createPmtAndMockBlockStore(btcTransaction, height);
+        PartialMerkleTree pmtWithWitness = createPmtWithWitness(btcTransaction);
+        BridgeSupport bridgeSupport = buildBridgeSupport(allActivations);
+        when(repository.getCode(destinationRskAddress)).thenReturn(new byte[]{0x00});
+
+        bridgeSupport.registerBtcTransaction(rskTx, btcTransaction.bitcoinSerialize(), height, pmtWithWitness.bitcoinSerialize());
+
+        assertCreditedAsVersion3(btcTransaction);
+    }
+
     @Test
     void pegin_v3_flagClear_destinationWithoutCode_isCredited() throws BlockStoreException, BridgeIllegalArgumentException, IOException {
         Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");

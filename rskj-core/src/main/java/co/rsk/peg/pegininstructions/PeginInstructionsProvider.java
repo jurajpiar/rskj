@@ -48,6 +48,7 @@ public class PeginInstructionsProvider {
             case PeginInstructionsVersion2.PROTOCOL_VERSION:
                 logger.trace("[buildPeginInstructions] Going to build peginInstructions version 2..");
                 peginInstructions = new PeginInstructionsVersion2(btcTx.getParams());
+                break;
             case PeginInstructionsVersion3.PROTOCOL_VERSION:
                 logger.trace("[buildPeginInstructions] Going to build peginInstructions version 3..");
                 peginInstructions = new PeginInstructionsVersion3(btcTx.getParams());
