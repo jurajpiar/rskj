@@ -113,6 +113,7 @@ public enum ConsensusRule {
     RSKIP535("rskip535"), // BaseEvent for the union bridge
     RSKIP536("rskip536"), // Additional methods for BlockHeader precompiled contract
     RSKIP_PEGIN_INSTRUCTIONS_V2("rskipPeginInstructionsV2"), // PoC: peg-in instructions version 2 (native segwit and taproot refund outputs). RSKIP number TBD
+    RSKIP_PEGIN_INSTRUCTIONS_V3("rskipPeginInstructionsV3"), // PoC: peg-in instructions version 3, conditional credit (REQUIRE_CODE) else refund. RSKIP number TBD
     ;
 
     private final String configKey;

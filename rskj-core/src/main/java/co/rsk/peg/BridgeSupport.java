@@ -500,7 +500,8 @@ public class BridgeSupport {
             peginInformation,
             minimumPeginTxValue,
             fedWallet,
-            activations
+            activations,
+            this::destinationHasCode
         );
 
         PeginProcessAction peginProcessAction = peginEvaluationResult.getPeginProcessAction();
@@ -513,6 +514,16 @@ public class BridgeSupport {
             case REFUND -> handleRefundablePegin(btcTx, rskTxHash, peginEvaluationResult, peginInformation.getBtcRefundScript());
             case NO_REFUND -> handleNonRefundablePegin(btcTx, peginInformation.getProtocolVersion(), peginEvaluationResult);
         }
+    }
+
+    /**
+     * Peg-in instructions v3 REQUIRE_CODE: "has code" means non-empty code in the state of the registering block
+     * (a contract created with zero-length runtime does not count); precompiled contracts count as having code.
+     * PoC: only genesis precompiles are recognised.
+     */
+    private boolean destinationHasCode(RskAddress destination) {
+        byte[] code = rskRepository.getCode(destination);
+        return (code != null && code.length > 0) || PrecompiledContracts.GENESIS_ADDRESSES.contains(destination);
     }
 
     private void handleRefundablePegin(

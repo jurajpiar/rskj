@@ -1,5 +1,6 @@
 package co.rsk.peg;
 
+import java.util.function.Predicate;
 import static co.rsk.peg.bitcoin.BitcoinUtils.getMultiSigTransactionHashWithoutSignatures;
 import static co.rsk.peg.bitcoin.BitcoinUtilsLegacy.getMultiSigTransactionHashWithoutSignaturesBeforeRSKIP305;
 import static co.rsk.peg.pegin.RejectedPeginReason.*;
@@ -20,6 +21,7 @@ import co.rsk.peg.pegin.PeginEvaluationResult;
 import co.rsk.peg.pegin.RejectedPeginReason;
 import co.rsk.peg.pegin.PeginProcessAction;
 import co.rsk.peg.pegininstructions.PeginInstructionsException;
+import co.rsk.peg.pegininstructions.PeginInstructionsVersion3;
 import java.util.*;
 import org.ethereum.config.blockchain.upgrades.ActivationConfig;
 import org.ethereum.config.blockchain.upgrades.ConsensusRule;
@@ -212,6 +214,24 @@ public class PegUtils {
         Wallet fedWallet,
         ActivationConfig.ForBlock activations
     ) {
+        // Callers that predate version 3 never see a REQUIRE_CODE payload; a lookup here is a programming error.
+        return evaluatePegin(btcTx, peginInformation, minimumPeginTxValue, fedWallet, activations, address -> {
+            throw new IllegalStateException("destination code lookup required but not provided");
+        });
+    }
+
+    /**
+     * @param destinationHasCode whether an RSK address holds code in the state of the registering block
+     *                           (peg-in instructions v3, REQUIRE_CODE)
+     */
+    static PeginEvaluationResult evaluatePegin(
+        BtcTransaction btcTx,
+        PeginInformation peginInformation,
+        Coin minimumPeginTxValue,
+        Wallet fedWallet,
+        ActivationConfig.ForBlock activations,
+        Predicate<RskAddress> destinationHasCode
+    ) {
         if (!activations.isActive(ConsensusRule.RSKIP379)) {
             throw new IllegalStateException("Can't call this method before RSKIP379 activation");
         }
@@ -253,12 +273,28 @@ public class PegUtils {
                     return new PeginEvaluationResult(action, injectedRejection.get());
                 }
                 return new PeginEvaluationResult(PeginProcessAction.REGISTER);
+            case PeginInstructionsVersion3.PROTOCOL_VERSION:
+                return evaluatePeginVersion3(peginInformation, destinationHasCode);
             default:
                 // This flow should never be reached.
                 String message = String.format("Invalid state. Unexpected pegin protocol %d", protocolVersion);
                 logger.error("[evaluatePegin] {}", message);
                 throw new IllegalStateException(message);
         }
+    }
+
+    private static PeginEvaluationResult evaluatePeginVersion3(PeginInformation peginInformation, Predicate<RskAddress> destinationHasCode) {
+        if (!peginInformation.requiresCodeAtDestination()) {
+            return new PeginEvaluationResult(PeginProcessAction.REGISTER);
+        }
+        RskAddress destination = peginInformation.getRskDestinationAddress();
+        if (destinationHasCode.test(destination)) {
+            logger.debug("[evaluatePeginVersion3] Destination {} has code, registering", destination);
+            return new PeginEvaluationResult(PeginProcessAction.REGISTER);
+        }
+        // The refund address is mandatory with REQUIRE_CODE (enforced at parse time), so this is always refundable
+        logger.debug("[evaluatePeginVersion3] Destination {} has no code, refunding", destination);
+        return new PeginEvaluationResult(PeginProcessAction.REFUND, PEGIN_DESTINATION_HAS_NO_CODE);
     }
 
     private static PeginEvaluationResult evaluateLegacyPegin(BtcTransaction btcTx, Wallet fedWallet, TxSenderAddressType senderAddressType)  {

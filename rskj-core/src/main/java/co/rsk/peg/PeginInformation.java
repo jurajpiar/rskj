@@ -13,6 +13,7 @@ import co.rsk.peg.pegininstructions.PeginInstructionsException;
 import co.rsk.peg.pegininstructions.PeginInstructionsProvider;
 import co.rsk.peg.pegininstructions.PeginInstructionsVersion1;
 import co.rsk.peg.pegininstructions.PeginInstructionsVersion2;
+import co.rsk.peg.pegininstructions.PeginInstructionsVersion3;
 import java.util.Optional;
 import org.ethereum.config.blockchain.upgrades.ActivationConfig;
 import org.ethereum.config.blockchain.upgrades.ConsensusRule;
@@ -33,6 +34,7 @@ public class PeginInformation {
     private Script btcRefundScript;
     private Address senderBtcAddress;
     private TxSenderAddressType senderBtcAddressType;
+    private boolean requiresCodeAtDestination;
 
     public PeginInformation(
         BtcLockSenderProvider btcLockSenderProvider,
@@ -71,6 +73,11 @@ public class PeginInformation {
 
     public TxSenderAddressType getSenderBtcAddressType() {
         return this.senderBtcAddressType;
+    }
+
+    /** Version 3 REQUIRE_CODE flag: credit only if the destination holds code at registration, else refund. */
+    public boolean requiresCodeAtDestination() {
+        return this.requiresCodeAtDestination;
     }
 
     public void parse(BtcTransaction btcTx) throws PeginInstructionsException {
@@ -123,6 +130,10 @@ public class PeginInformation {
         // reject it before recording its version, exactly as nodes without this code do.
         if (peginInstructions.getProtocolVersion() == PeginInstructionsVersion2.PROTOCOL_VERSION
             && !activations.isActive(ConsensusRule.RSKIP_PEGIN_INSTRUCTIONS_V2)) {
+        // Before activation a version-3 payload must be indistinguishable from an unknown version:
+        // reject it before recording its version, exactly as nodes without this code do.
+        if (peginInstructions.getProtocolVersion() == PeginInstructionsVersion3.PROTOCOL_VERSION
+            && !activations.isActive(ConsensusRule.RSKIP_PEGIN_INSTRUCTIONS_V3)) {
             String message = String.format("Invalid protocol version: %d", peginInstructions.getProtocolVersion());
             logger.warn("[parseFromPeginInstructions] {}", message);
             throw new PeginInstructionsException(message);
@@ -141,6 +152,9 @@ public class PeginInformation {
             case PeginInstructionsVersion2.PROTOCOL_VERSION:
                 PeginInstructionsVersion2 peginInstructionsV2 = (PeginInstructionsVersion2) peginInstructions;
                 parseFromPeginInstructionsVersion2(peginInstructionsV2);
+            case PeginInstructionsVersion3.PROTOCOL_VERSION:
+                PeginInstructionsVersion3 peginInstructionsV3 = (PeginInstructionsVersion3) peginInstructions;
+                parseFromPeginInstructionsVersion3(peginInstructionsV3);
                 break;
             default:
                 String message = String.format("Invalid protocol version: %d", protocolVersion);
@@ -168,5 +182,13 @@ public class PeginInformation {
         // Witness-program refunds have no Address representation; only legacy types set it
         this.btcRefundAddress = peginInstructions.getBtcRefundAddress().orElse(null);
         logger.trace("[parseFromPeginInstructionsVersion2] BTC refund script: {}", this.btcRefundScript);
+    private void parseFromPeginInstructionsVersion3(PeginInstructionsVersion3 peginInstructions) {
+        this.requiresCodeAtDestination = peginInstructions.requiresCode();
+        Optional<Address> btcRefundAddressOptional = peginInstructions.getBtcRefundAddress();
+        if (btcRefundAddressOptional.isPresent()) {
+            this.btcRefundAddress = btcRefundAddressOptional.get();
+        }
+        logger.trace("[parseFromPeginInstructionsVersion3] Requires code: {}. BTC refund address: {}",
+            this.requiresCodeAtDestination, this.btcRefundAddress);
     }
 }
