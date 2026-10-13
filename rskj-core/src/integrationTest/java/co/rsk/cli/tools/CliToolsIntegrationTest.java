@@ -31,6 +31,7 @@ import com.squareup.okhttp.Response;
 import org.ethereum.core.Block;
 import org.ethereum.util.ByteUtil;
 import org.ethereum.util.FileUtil;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -102,6 +103,11 @@ class CliToolsIntegrationTest {
             cleanupTempFiles();
             throw e;
         }
+    }
+
+    @AfterEach
+    void tearDown() {
+        cleanupTempFiles();
     }
 
     @Test
@@ -525,10 +531,11 @@ class CliToolsIntegrationTest {
      */
     private void cleanupTempFiles() {
         try {
-            // Clean up any remaining files in temp directory
+            // Clean up any remaining files in temp directory without deleting tempDir itself
             if (tempDir != null && Files.exists(tempDir)) {
                 Files.walk(tempDir)
                         .sorted((a, b) -> b.compareTo(a)) // Delete files before directories
+                        .filter(path -> !path.equals(tempDir))
                         .forEach(path -> {
                             try {
                                 Files.deleteIfExists(path);
