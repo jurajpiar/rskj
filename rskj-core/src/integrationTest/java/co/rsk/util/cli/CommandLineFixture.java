@@ -65,27 +65,103 @@ public final class CommandLineFixture {
 
     public static CustomProcess runCommand(String cmd, int timeout, TimeUnit timeUnit, Consumer<Process> beforeDestroyFn, boolean assertProcExitCode) throws InterruptedException, IOException {
         Process proc = Runtime.getRuntime().exec(cmd);
-        String procOutput;
+        StringBuilder stdoutBuilder = new StringBuilder();
+        StringBuilder stderrBuilder = new StringBuilder();
 
-        try {
-            proc.waitFor(timeout, timeUnit);
-
-            procOutput = CommandLineFixture.readProcStream(proc.getInputStream());
-            String procError = CommandLineFixture.readProcStream(proc.getErrorStream());
-
-            if (assertProcExitCode && !proc.isAlive()) {
-                System.out.println("procOutput: " + procOutput);
-                System.out.println("procError:" + procError);
-                Assertions.assertEquals(0, proc.exitValue(), "Proc exited with value: " + proc.exitValue());
+        Thread outThread = new Thread(new StreamGobbler(proc.getInputStream(), line -> {
+            synchronized (stdoutBuilder) {
+                stdoutBuilder.append(line).append(System.lineSeparator());
             }
+        }), "cmdline-stdout-gobbler");
+        outThread.setDaemon(true);
+        outThread.start();
+
+        Thread errThread = new Thread(new StreamGobbler(proc.getErrorStream(), line -> {
+            synchronized (stderrBuilder) {
+                stderrBuilder.append(line).append(System.lineSeparator());
+            }
+        }), "cmdline-stderr-gobbler");
+        errThread.setDaemon(true);
+        errThread.start();
+
+        boolean finished = false;
+        try {
+            finished = proc.waitFor(timeout, timeUnit);
 
             if (beforeDestroyFn != null) {
                 beforeDestroyFn.accept(proc);
             }
         } finally {
-            proc.destroy();
+            destroyProcess(proc);
+            try {
+                outThread.join(2000);
+                errThread.join(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        String procOutput;
+        String procError;
+        synchronized (stdoutBuilder) {
+            procOutput = stdoutBuilder.toString();
+        }
+        synchronized (stderrBuilder) {
+            procError = stderrBuilder.toString();
+        }
+
+        if (assertProcExitCode && finished) {
+            System.out.println("procOutput: " + procOutput);
+            System.out.println("procError:" + procError);
+            Assertions.assertEquals(0, proc.exitValue(), "Proc exited with value: " + proc.exitValue());
         }
 
         return new CustomProcess(procOutput);
+    }
+
+    public static void destroyProcess(Process proc) {
+        if (proc == null || !proc.isAlive()) {
+            return;
+        }
+
+        try {
+            proc.descendants().forEach(ph -> {
+                try {
+                    ph.destroy();
+                } catch (Exception ignored) {
+                }
+            });
+        } catch (Exception ignored) {
+        }
+
+        proc.destroy();
+
+        try {
+            if (!proc.waitFor(15, TimeUnit.SECONDS)) {
+                try {
+                    proc.descendants().forEach(ph -> {
+                        try {
+                            ph.destroyForcibly();
+                        } catch (Exception ignored) {
+                        }
+                    });
+                } catch (Exception ignored) {
+                }
+                proc.destroyForcibly();
+                proc.waitFor(10, TimeUnit.SECONDS);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            try {
+                proc.descendants().forEach(ph -> {
+                    try {
+                        ph.destroyForcibly();
+                    } catch (Exception ignored) {
+                    }
+                });
+            } catch (Exception ignored) {
+            }
+            proc.destroyForcibly();
+        }
     }
 }
