@@ -48,6 +48,7 @@ import co.rsk.peg.lockingcap.LockingCapSupport;
 import co.rsk.peg.pegin.*;
 import co.rsk.peg.pegininstructions.PeginInstructionsException;
 import co.rsk.peg.pegininstructions.PeginInstructionsProvider;
+import co.rsk.peg.pegininstructions.PeginInstructionsVersion3;
 import co.rsk.peg.union.UnionBridgeSupport;
 import co.rsk.peg.union.UnionResponseCode;
 import co.rsk.peg.utils.*;
@@ -511,7 +512,7 @@ public class BridgeSupport {
                 logger.debug("[{}] Peg-in is valid, going to register", METHOD_NAME);
                 executePegIn(btcTx, peginInformation, totalAmount);
             }
-            case REFUND -> handleRefundablePegin(btcTx, rskTxHash, peginEvaluationResult, peginInformation.getBtcRefundScript());
+            case REFUND -> handleRefundablePegin(btcTx, rskTxHash, peginEvaluationResult, peginInformation);
             case NO_REFUND -> handleNonRefundablePegin(btcTx, peginInformation.getProtocolVersion(), peginEvaluationResult);
         }
     }
@@ -530,8 +531,9 @@ public class BridgeSupport {
         BtcTransaction btcTx,
         Keccak256 rskTxHash,
         PeginEvaluationResult peginEvaluationResult,
-        Script btcRefundScript
+        PeginInformation peginInformation
     ) throws IOException {
+        Script btcRefundScript = peginInformation.getBtcRefundScript();
 
         RejectedPeginReason rejectedPeginReason = peginEvaluationResult.getRejectedPeginReason()
             .orElseThrow(() -> {
@@ -542,11 +544,19 @@ public class BridgeSupport {
             });
 
         logger.debug("[{handleRefundablePegin}] Rejected peg-in, reason {}", rejectedPeginReason);
-        eventLogger.logRejectedPegin(btcTx, rejectedPeginReason);
-
         logger.debug("[{handleRefundablePegin}] Refunding to script {} ", btcRefundScript);
         Coin totalAmount = computeTotalAmountSent(btcTx);
-        generateRejectionRelease(btcTx, btcRefundScript, rskTxHash, totalAmount);
+        boolean released = generateRejectionRelease(btcTx, btcRefundScript, rskTxHash, totalAmount);
+        if (!released && peginInformation.getProtocolVersion() == PeginInstructionsVersion3.PROTOCOL_VERSION) {
+            // PoC (RSKIP v3, "credit instead of losing"): a version-3 refund the builder cannot make would
+            // leave the deposit with the federation and no record; credit the destination as a version-2
+            // payload would have been, so the funds stay reachable. Only pegin_btc is logged for it.
+            logger.warn("[{handleRefundablePegin}] v3 refund release could not be built for {}; crediting the destination instead", btcTx.getHash());
+            executePegIn(btcTx, peginInformation, totalAmount); // marks the transaction processed as a REGISTER does
+            return;
+        }
+        // The rejection is logged once the release exists (or, for versions 1 and 2, as before)
+        eventLogger.logRejectedPegin(btcTx, rejectedPeginReason);
         markTxAsProcessed(btcTx);
     }
 
@@ -3100,7 +3110,7 @@ public class BridgeSupport {
         }
     }
 
-    private void generateRejectionReleaseWithWalletProvider(
+    private boolean generateRejectionReleaseWithWalletProvider(
         BtcTransaction btcTx,
         Script btcRefundScript,
         Keccak256 rskTxHash,
@@ -3112,7 +3122,7 @@ public class BridgeSupport {
         Wallet wallet = walletProvider.provide(btcTx, emptyList);
 
         Federation federation = getFederationFromTxOutputs(btcTx);
-        generateRejectionReleaseFromFederation(btcTx, btcRefundScript, federation, rskTxHash, totalAmount, wallet);
+        return generateRejectionReleaseFromFederation(btcTx, btcRefundScript, federation, rskTxHash, totalAmount, wallet);
     }
 
     // Having to create a rejection release with outputs for both
@@ -3201,7 +3211,8 @@ public class BridgeSupport {
         return false;
     }
 
-    private void generateRejectionReleaseFromFederation(
+    /// Returns whether a release was built and queued; false when the builder could not make it.
+    private boolean generateRejectionReleaseFromFederation(
         BtcTransaction btcTx,
         Script btcRefundScript,
         Federation federation,
@@ -3230,7 +3241,7 @@ public class BridgeSupport {
                 totalAmount
             );
             panicProcessor.panic("peg-in-refund", String.format("peg-in money return tx build for btc tx %s error. Return was to %s. Tx %s. Value %s. Reason %s", btcTx.getHash(), btcRefundScript, rskTxHash, totalAmount, buildReturnResult.responseCode()));
-            return;
+            return false;
         }
 
         logger.info(
@@ -3243,6 +3254,7 @@ public class BridgeSupport {
         PegoutsWaitingForConfirmations pegoutsWaitingForConfirmations = provider.getPegoutsWaitingForConfirmations();
         BtcTransaction refundPegoutTransaction = buildReturnResult.btcTx();
         settleReleaseRejection(pegoutsWaitingForConfirmations, refundPegoutTransaction, rskTxHash, totalAmount);
+        return true;
     }
 
     private void settleReleaseRejection(PegoutsWaitingForConfirmations pegoutsWaitingForConfirmations, BtcTransaction releaseRejectedTransaction, Keccak256 releaseCreationTxHash, Coin requestedAmount) {
@@ -3251,16 +3263,16 @@ public class BridgeSupport {
         processReleaseTransactionInfo(releaseRejectedTransaction);
     }
 
-    private void generateRejectionRelease(
+    private boolean generateRejectionRelease(
         BtcTransaction btcTx,
         Address senderBtcAddress,
         Keccak256 rskTxHash,
         Coin totalAmount
     ) throws IOException {
-        generateRejectionRelease(btcTx, ScriptBuilder.createOutputScript(senderBtcAddress), rskTxHash, totalAmount);
+        return generateRejectionRelease(btcTx, ScriptBuilder.createOutputScript(senderBtcAddress), rskTxHash, totalAmount);
     }
 
-    private void generateRejectionRelease(
+    private boolean generateRejectionRelease(
         BtcTransaction btcTx,
         Script btcRefundScript,
         Keccak256 rskTxHash,
@@ -3289,7 +3301,7 @@ public class BridgeSupport {
             return getUTXOBasedWalletForLiveFederations(utxosToUse, false);
         };
 
-        generateRejectionReleaseWithWalletProvider(btcTx, btcRefundScript, rskTxHash, totalAmount, walletProvider);
+        return generateRejectionReleaseWithWalletProvider(btcTx, btcRefundScript, rskTxHash, totalAmount, walletProvider);
     }
 
     private boolean verifyLockDoesNotSurpassLockingCap(BtcTransaction btcTx, Coin totalAmount) {

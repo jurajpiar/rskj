@@ -3780,6 +3780,34 @@ class BridgeSupportRegisterBtcTransactionTest {
     }
 
     @Test
+    void pegin_v3_requireCode_destinationWithoutCode_unbuildableRefund_isCreditedInstead() throws BlockStoreException, BridgeIllegalArgumentException, IOException {
+        // RSKIP v3 "credit instead of losing": feePerKb at the maximum makes a release for the minimum
+        // peg-in unbuildable (COULD_NOT_ADJUST_DOWNWARDS); the Bridge credits the code-less destination
+        // as a version-2 payload would, logs pegin_btc only, queues no release.
+        Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
+        BtcTransaction btcTransaction = new BtcTransaction(btcMainnetParams);
+        btcTransaction.addInput(BitcoinTestUtils.createHash(1), FIRST_OUTPUT_INDEX, ScriptBuilder.createInputScript(null, new BtcECKey()));
+        btcTransaction.addOutput(minimumPeginTxValue, activeFederation.getAddress());
+        btcTransaction.addOutput(Coin.ZERO, PegTestUtils.createOpReturnScriptForRskV3(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund)));
+        int height = heightAtWhichToStartUsingPegoutIndex;
+        PartialMerkleTree pmt = createPmtAndMockBlockStore(btcTransaction, height);
+        BridgeSupport bridgeSupport = buildBridgeSupport(allActivations); // creates the repository mock
+        when(repository.getCode(destinationRskAddress)).thenReturn(new byte[0]);
+        when(repository.getStorageBytes(any(), eq(co.rsk.peg.feeperkb.FeePerKbStorageIndexKey.FEE_PER_KB.getKey())))
+            .thenReturn(co.rsk.peg.BridgeSerializationUtils.serializeCoin(Coin.valueOf(5_000_000L)));
+
+        bridgeSupport.registerBtcTransaction(rskTx, btcTransaction.bitcoinSerialize(), height, pmt.bitcoinSerialize());
+
+        verify(bridgeEventLogger, never()).logRejectedPegin(any(), any());
+        verify(bridgeEventLogger, never()).logNonRefundablePegin(any(), any());
+        verify(bridgeEventLogger, never()).logReleaseBtcRequested(any(), any(), any());
+        verify(bridgeEventLogger, times(1)).logPeginBtc(eq(destinationRskAddress), eq(btcTransaction), eq(minimumPeginTxValue), eq(3));
+        verify(bridgeStorageProvider, times(1)).setHeightBtcTxhashAlreadyProcessed(btcTransaction.getHash(false), rskExecutionBlock.getNumber());
+        assertTrue(pegoutsWaitingForConfirmations.getEntries().isEmpty());
+        assertFalse(activeFederationUtxos.isEmpty());
+    }
+
+    @Test
     void pegin_v3_requireCode_contractWithEmptyRuntime_isRefunded() throws BlockStoreException, BridgeIllegalArgumentException, IOException {
         // A successful creation that returned zero-length runtime leaves a contract account with no code: "has code" is false
         Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
