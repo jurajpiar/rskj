@@ -274,7 +274,7 @@ public class PegUtils {
                 }
                 return new PeginEvaluationResult(PeginProcessAction.REGISTER);
             case PeginInstructionsVersion3.PROTOCOL_VERSION:
-                return evaluatePeginVersion3(peginInformation, destinationHasCode);
+                return evaluatePeginVersion3(btcTx, fedWallet, peginInformation, destinationHasCode);
             default:
                 // This flow should never be reached.
                 String message = String.format("Invalid state. Unexpected pegin protocol %d", protocolVersion);
@@ -283,7 +283,12 @@ public class PegUtils {
         }
     }
 
-    private static PeginEvaluationResult evaluatePeginVersion3(PeginInformation peginInformation, Predicate<RskAddress> destinationHasCode) {
+    private static PeginEvaluationResult evaluatePeginVersion3(
+        BtcTransaction btcTx,
+        Wallet fedWallet,
+        PeginInformation peginInformation,
+        Predicate<RskAddress> destinationHasCode
+    ) {
         if (!peginInformation.requiresCodeAtDestination()) {
             return new PeginEvaluationResult(PeginProcessAction.REGISTER);
         }
@@ -292,6 +297,19 @@ public class PegUtils {
             logger.debug("[evaluatePeginVersion3] Destination {} has code, registering", destination);
             return new PeginEvaluationResult(PeginProcessAction.REGISTER);
         }
+        if (peginInformation.refundsToChange()) {
+            // the refund is the deposit's change output. None or several: credit instead,
+            // the same ending as a refund that cannot be built (the destination has no code, so the credit is
+            // parked by the destination's own rules).
+            Optional<Script> change = changeOutputScript(btcTx, fedWallet);
+            if (change.isEmpty()) {
+                logger.debug("[evaluatePeginVersion3] Destination {} has no code and the deposit has no single change output: crediting", destination);
+                return new PeginEvaluationResult(PeginProcessAction.REGISTER);
+            }
+            peginInformation.setBtcRefundScript(change.get());
+            logger.debug("[evaluatePeginVersion3] Destination {} has no code, refunding to the change output {}", destination, change.get());
+            return new PeginEvaluationResult(PeginProcessAction.REFUND, PEGIN_DESTINATION_HAS_NO_CODE);
+        }
         // The refund output is mandatory with REQUIRE_CODE (enforced at parse time), so this is always refundable;
         // the guard only documents the invariant
         PeginProcessAction action = peginInformation.getBtcRefundScript() != null
@@ -299,6 +317,31 @@ public class PegUtils {
             : PeginProcessAction.NO_REFUND;
         logger.debug("[evaluatePeginVersion3] Destination {} has no code, {}", destination, action);
         return new PeginEvaluationResult(action, PEGIN_DESTINATION_HAS_NO_CODE);
+    }
+
+    /**
+     * The deposit's change output, if there is exactly one: an output that pays neither a live federation
+     * (as the federation wallet sees it) nor an OP_RETURN. Empty when there is none or more than one.
+     */
+    static Optional<Script> changeOutputScript(BtcTransaction btcTx, Wallet fedWallet) {
+        java.util.Set<Integer> federationOutputs = new java.util.HashSet<>();
+        for (TransactionOutput output : btcTx.getWalletOutputs(fedWallet)) {
+            federationOutputs.add(output.getIndex());
+        }
+        Script change = null;
+        int count = 0;
+        for (TransactionOutput output : btcTx.getOutputs()) {
+            if (federationOutputs.contains(output.getIndex())) {
+                continue;
+            }
+            Script script = output.getScriptPubKey();
+            if (script.isOpReturn()) {
+                continue;
+            }
+            count++;
+            change = script;
+        }
+        return count == 1 ? Optional.of(change) : Optional.empty();
     }
 
     private static PeginEvaluationResult evaluateLegacyPegin(BtcTransaction btcTx, Wallet fedWallet, TxSenderAddressType senderAddressType)  {

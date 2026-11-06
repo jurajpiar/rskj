@@ -17,14 +17,20 @@ import org.slf4j.LoggerFactory;
  * The refund is encoded exactly as in version 2 ({@link PeginRefundScriptType}: P2PKH, P2SH, P2WPKH, P2WSH,
  * P2TR), so valid data lengths are 26, 47 and 59 bytes. With {@link #REQUIRE_CODE} set, the Bridge credits
  * the destination only if it holds code at registration and refunds to the refund output otherwise; the
- * refund output is therefore mandatory with the flag.
+ * refund output is therefore mandatory with the flag, unless {@link #REFUND_TO_CHANGE} is set as well.
+ *
+ * <p>{@link #REFUND_TO_CHANGE}: valid only together with {@link #REQUIRE_CODE}, and only
+ * in the 26-byte form. The refund is then the deposit transaction's one output that pays neither a live
+ * federation nor an OP_RETURN, resolved at registration ({@code PegUtils.changeOutputScript}); if there is
+ * no such output or more than one, the Bridge credits the destination instead of refunding.
  */
 public class PeginInstructionsVersion3 extends PeginInstructionsBase {
     private static final Logger logger = LoggerFactory.getLogger(PeginInstructionsVersion3.class);
 
     public static final int PROTOCOL_VERSION = 3;
     public static final int REQUIRE_CODE = 0x01;
-    private static final int RESERVED_FLAGS_MASK = 0xFE;
+    public static final int REFUND_TO_CHANGE = 0x02;
+    private static final int RESERVED_FLAGS_MASK = 0xFC;
 
     private static final int FLAGS_INDEX = 25;
     private static final int NO_REFUND_LENGTH = 26;
@@ -66,8 +72,19 @@ public class PeginInstructionsVersion3 extends PeginInstructionsBase {
         }
         this.flags = parsedFlags;
 
+        if (refundsToChange() && !requiresCode()) {
+            String message = "[parseAdditionalData] REFUND_TO_CHANGE set without REQUIRE_CODE";
+            logger.debug(message);
+            throw new PeginInstructionsParseException(message);
+        }
+        if (refundsToChange() && data.length != NO_REFUND_LENGTH) {
+            String message = "[parseAdditionalData] REFUND_TO_CHANGE set but a refund output provided";
+            logger.debug(message);
+            throw new PeginInstructionsParseException(message);
+        }
+
         if (data.length == NO_REFUND_LENGTH) {
-            if (requiresCode()) {
+            if (requiresCode() && !refundsToChange()) {
                 // A peg-in must not commit to a refund it cannot receive
                 String message = "[parseAdditionalData] REQUIRE_CODE set but no refund output provided";
                 logger.debug(message);
@@ -107,6 +124,11 @@ public class PeginInstructionsVersion3 extends PeginInstructionsBase {
 
     public boolean requiresCode() {
         return (flags & REQUIRE_CODE) != 0;
+    }
+
+    /** The refund is the deposit's change output, resolved at registration; no slot in the payload. */
+    public boolean refundsToChange() {
+        return (flags & REFUND_TO_CHANGE) != 0;
     }
 
     public Optional<PeginRefundScriptType> getBtcRefundScriptType() {

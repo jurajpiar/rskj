@@ -35,6 +35,7 @@ public class PeginInformation {
     private Address senderBtcAddress;
     private TxSenderAddressType senderBtcAddressType;
     private boolean requiresCodeAtDestination;
+    private boolean refundsToChange;
 
     public PeginInformation(
         BtcLockSenderProvider btcLockSenderProvider,
@@ -78,6 +79,17 @@ public class PeginInformation {
     /** Version 3 REQUIRE_CODE flag: credit only if the destination holds code at registration, else refund. */
     public boolean requiresCodeAtDestination() {
         return this.requiresCodeAtDestination;
+    }
+
+    /** Version 3 REFUND_TO_CHANGE flag: the refund is the deposit's change output, resolved at registration. */
+    public boolean refundsToChange() {
+        return this.refundsToChange;
+    }
+
+    /** The refund resolved from the transaction's outputs by {@code PegUtils.changeOutputScript}. */
+    public void setBtcRefundScript(Script btcRefundScript) {
+        this.btcRefundScript = btcRefundScript;
+        this.btcRefundAddress = null; // a change output of any type: no Address form is kept
     }
 
     public void parse(BtcTransaction btcTx) throws PeginInstructionsException {
@@ -190,6 +202,12 @@ public class PeginInformation {
 
     private void parseFromPeginInstructionsVersion3(PeginInstructionsVersion3 peginInstructions) {
         this.requiresCodeAtDestination = peginInstructions.requiresCode();
+        this.refundsToChange = peginInstructions.refundsToChange();
+        if (this.refundsToChange) {
+            // the sender-derived refund does not apply; the change output is resolved at evaluation
+            this.btcRefundScript = null;
+            this.btcRefundAddress = null;
+        }
         Optional<Script> btcRefundScriptOptional = peginInstructions.getBtcRefundScript();
         if (btcRefundScriptOptional.isPresent()) {
             // Encoded as in version 2: witness-program refunds have no Address form, only legacy types set it
