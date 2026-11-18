@@ -63,6 +63,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.InOrder;
+import org.mockito.MockedConstruction;
 
 class BridgeSupportRegisterBtcTransactionTest {
     private static final ActivationConfig.ForBlock fingerrootActivations = ActivationConfigsForTest.fingerroot500().forBlock(0);
@@ -2169,6 +2171,181 @@ class BridgeSupportRegisterBtcTransactionTest {
             assertRejectedPeginWasNotRefunded(pegin);
         }
 
+        // --- Peg-in instructions v3, REQUIRE_CODE and no code at the destination: the events actually emitted ---
+
+        private void registerPeginV3Twice(BtcTransaction pegin) throws BlockStoreException, BridgeIllegalArgumentException, IOException {
+            PartialMerkleTree pmtWithTransactions = buildPMTAndRecreateChainForTransactionRegistration(
+                bridgeStorageProvider,
+                bridgeConstants,
+                (int) rskExecutionBlockNumber,
+                pegin,
+                btcBlockStore
+            );
+            bridgeSupport.registerBtcTransaction(rskTx, pegin.bitcoinSerialize(), (int) rskExecutionBlockNumber, pmtWithTransactions.bitcoinSerialize());
+            bridgeSupport.save();
+            int logsAfterFirstRegistration = logs.size();
+
+            // registering it again has no effect
+            bridgeSupport.registerBtcTransaction(rskTx, pegin.bitcoinSerialize(), (int) rskExecutionBlockNumber, pmtWithTransactions.bitcoinSerialize());
+            bridgeSupport.save();
+            assertEquals(logsAfterFirstRegistration, logs.size());
+        }
+
+        private void assertLogIsEvent(int logIndex, BridgeEvents expectedEvent) {
+            assertArrayEquals(
+                expectedEvent.getEvent().encodeSignatureLong(),
+                logs.get(logIndex).getTopics().get(0).getData()
+            );
+        }
+
+        @Test
+        void registerBtcTransaction_peginV3RequireCode_destinationWithoutCode_sentToBothRetiringAndActiveFeds_shouldNotRefundNorCredit() throws Exception {
+            // arrange
+            retiringFederation = P2shErpFederationBuilder.builder().build();
+            activeFederation = P2shP2wshErpFederationBuilder.builder()
+                .withCreationBlockNumber(activeFedCreationBlockNumber)
+                .build();
+            setUp(allActivations);
+
+            Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
+            BtcTransaction pegin = buildPeginV3Tx(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
+            pegin.addOutput(valueToSend, retiringFederation.getAddress());
+
+            // act
+            registerPeginV3Twice(pegin);
+
+            // assert: rejected_pegin then unrefundable_pegin, and nothing else
+            assertEquals(2, logs.size());
+            assertLogIsEvent(0, BridgeEvents.REJECTED_PEGIN);
+            assertLogIsEvent(1, BridgeEvents.UNREFUNDABLE_PEGIN);
+            assertLogRejectedPegin(logs, pegin, PEGIN_DESTINATION_HAS_NO_CODE);
+            assertLogNonRefundablePegin(logs, pegin, NonRefundablePeginReason.OUTPUTS_SENT_TO_DIFFERENT_FEDS);
+            assertTransactionWasProcessed(pegin.getHash());
+            assertRefundWasNotCreated();
+            assertUtxosSize(0);
+        }
+
+        @Test
+        void registerBtcTransaction_peginV3RequireCode_destinationWithoutCode_feeExceedsTheDeposit_shouldNotRefundNorCredit() throws Exception {
+            // arrange
+            retiringFederation = P2shErpFederationBuilder.builder().build();
+            activeFederation = P2shP2wshErpFederationBuilder.builder()
+                .withCreationBlockNumber(activeFedCreationBlockNumber)
+                .build();
+            setUp(allActivations);
+            when(feePerKbSupport.getFeePerKb()).thenReturn(Coin.COIN.multiply(10)); // the release fee exceeds the 1 BTC deposit
+
+            Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
+            BtcTransaction pegin = buildPeginV3Tx(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
+
+            // act
+            registerPeginV3Twice(pegin);
+
+            // assert: rejected_pegin then unrefundable_pegin, and nothing else
+            assertEquals(2, logs.size());
+            assertLogIsEvent(0, BridgeEvents.REJECTED_PEGIN);
+            assertLogIsEvent(1, BridgeEvents.UNREFUNDABLE_PEGIN);
+            assertLogRejectedPegin(logs, pegin, PEGIN_DESTINATION_HAS_NO_CODE);
+            assertLogNonRefundablePegin(logs, pegin, NonRefundablePeginReason.REFUND_RELEASE_NOT_BUILT);
+            assertTransactionWasProcessed(pegin.getHash());
+            assertRefundWasNotCreated();
+            assertUtxosSize(0);
+        }
+
+        @Test
+        void registerBtcTransaction_peginV3RequireCode_destinationWithoutCode_releaseExceedsTheMaximumSize_shouldNotRefundNorCredit() throws Exception {
+            // arrange: with the real builder, 200 outputs to a 5-of-9 P2SH ERP federation make a release of more than
+            // 100,000 bytes (it fails from 196 outputs on, see V3StrictRefundSizeExperimentTest)
+            retiringFederation = P2shErpFederationBuilder.builder().build();
+            activeFederation = P2shErpFederationBuilder.builder()
+                .withMembersBtcPublicKeys(BitcoinTestUtils.getBtcEcKeysFromSeeds(
+                    new String[]{"active01", "active02", "active03", "active04", "active05", "active06", "active07", "active08", "active09"}, true))
+                .withCreationBlockNumber(activeFedCreationBlockNumber)
+                .build();
+            setUp(allActivations);
+
+            Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
+            BtcTransaction pegin = buildPeginV3Tx(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
+            for (int i = 0; i < 199; i++) {
+                pegin.addOutput(valueToSend, activeFederation.getAddress());
+            }
+
+            // act
+            registerPeginV3Twice(pegin);
+
+            // assert: rejected_pegin then unrefundable_pegin, and nothing else
+            assertEquals(2, logs.size());
+            assertLogIsEvent(0, BridgeEvents.REJECTED_PEGIN);
+            assertLogIsEvent(1, BridgeEvents.UNREFUNDABLE_PEGIN);
+            assertLogRejectedPegin(logs, pegin, PEGIN_DESTINATION_HAS_NO_CODE);
+            assertLogNonRefundablePegin(logs, pegin, NonRefundablePeginReason.REFUND_RELEASE_NOT_BUILT);
+            assertTransactionWasProcessed(pegin.getHash());
+            assertRefundWasNotCreated();
+            assertUtxosSize(0);
+        }
+
+        @Test
+        void registerBtcTransaction_peginV3RequireCode_destinationWithoutCode_sentToActiveFed_shouldLogRejectionBeforeReleaseRequest() throws Exception {
+            // arrange
+            retiringFederation = P2shErpFederationBuilder.builder().build();
+            activeFederation = P2shP2wshErpFederationBuilder.builder()
+                .withCreationBlockNumber(activeFedCreationBlockNumber)
+                .build();
+            setUp(allActivations);
+
+            Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
+            BtcTransaction pegin = buildPeginV3Tx(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
+
+            // act
+            registerPeginV3Twice(pegin);
+
+            // assert
+            assertLogIsEvent(0, BridgeEvents.REJECTED_PEGIN);
+            assertLogIsEvent(1, BridgeEvents.RELEASE_REQUESTED);
+            assertLogRejectedPegin(logs, pegin, PEGIN_DESTINATION_HAS_NO_CODE);
+            assertTransactionWasProcessed(pegin.getHash());
+            assertRefundWasCreated();
+            assertUtxosSize(0);
+        }
+
+        @Test
+        void registerBtcTransaction_peginV3RequireCode_destinationWithoutCode_errorBuildingTheRefund_shouldAbortWithNoLogNorState() throws Exception {
+            // arrange
+            retiringFederation = P2shErpFederationBuilder.builder().build();
+            activeFederation = P2shP2wshErpFederationBuilder.builder()
+                .withCreationBlockNumber(activeFedCreationBlockNumber)
+                .build();
+            setUp(allActivations);
+            when(feePerKbSupport.getFeePerKb()).thenThrow(new IllegalStateException("fee lookup fault"));
+
+            Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
+            BtcTransaction pegin = buildPeginV3Tx(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
+            PartialMerkleTree pmtWithTransactions = buildPMTAndRecreateChainForTransactionRegistration(
+                bridgeStorageProvider,
+                bridgeConstants,
+                (int) rskExecutionBlockNumber,
+                pegin,
+                btcBlockStore
+            );
+            byte[] peginSerialized = pegin.bitcoinSerialize();
+            byte[] pmtSerialized = pmtWithTransactions.bitcoinSerialize();
+
+            // act & assert: the call fails, as the Bridge needs to skip saving; no log is left behind
+            assertThrows(IllegalStateException.class, () -> bridgeSupport.registerBtcTransaction(rskTx, peginSerialized, (int) rskExecutionBlockNumber, pmtSerialized));
+            assertTrue(logs.isEmpty());
+            assertPeginWasNotProcessed(pegin.getHash());
+
+            // once the fault is removed the same deposit is refunded normally
+            doReturn(Coin.MILLICOIN).when(feePerKbSupport).getFeePerKb();
+            bridgeSupport.registerBtcTransaction(rskTx, peginSerialized, (int) rskExecutionBlockNumber, pmtSerialized);
+            bridgeSupport.save();
+
+            assertLogIsEvent(0, BridgeEvents.REJECTED_PEGIN);
+            assertLogIsEvent(1, BridgeEvents.RELEASE_REQUESTED);
+            assertTransactionWasProcessed(pegin.getHash());
+            assertRefundWasCreated();
+        }
+
         private void assertPeginWasRejectedAndRefunded(int expectedAmountOfRefundInputs, BtcTransaction rejectedPegin) throws IOException {
             BtcTransaction pegout = getReleaseFromPegoutsWFC(bridgeStorageProvider);
             assertEquals(expectedAmountOfRefundInputs, pegout.getInputs().size());
@@ -3780,10 +3957,9 @@ class BridgeSupportRegisterBtcTransactionTest {
     }
 
     @Test
-    void pegin_v3_requireCode_destinationWithoutCode_unbuildableRefund_isCreditedInstead() throws BlockStoreException, BridgeIllegalArgumentException, IOException {
-        // RSKIP v3 "credit instead of losing": feePerKb at the maximum makes a release for the minimum
-        // peg-in unbuildable (COULD_NOT_ADJUST_DOWNWARDS); the Bridge credits the code-less destination
-        // as a version-2 payload would, logs pegin_btc only, queues no release.
+    void pegin_v3_requireCode_destinationWithoutCode_unbuildableRefund_isUnrefundableAndNeverCredited() throws BlockStoreException, BridgeIllegalArgumentException, IOException {
+        // feePerKb at the maximum makes a release for the minimum peg-in unbuildable (the fee exceeds the deposit).
+        // The strict rule: rejected_pegin (6) then unrefundable_pegin (6), no credit, nothing queued, marked processed.
         Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
         BtcTransaction btcTransaction = new BtcTransaction(btcMainnetParams);
         btcTransaction.addInput(BitcoinTestUtils.createHash(1), FIRST_OUTPUT_INDEX, ScriptBuilder.createInputScript(null, new BtcECKey()));
@@ -3798,13 +3974,203 @@ class BridgeSupportRegisterBtcTransactionTest {
 
         bridgeSupport.registerBtcTransaction(rskTx, btcTransaction.bitcoinSerialize(), height, pmt.bitcoinSerialize());
 
-        verify(bridgeEventLogger, never()).logRejectedPegin(any(), any());
-        verify(bridgeEventLogger, never()).logNonRefundablePegin(any(), any());
+        InOrder inOrder = inOrder(bridgeEventLogger);
+        inOrder.verify(bridgeEventLogger, times(1)).logRejectedPegin(btcTransaction, PEGIN_DESTINATION_HAS_NO_CODE);
+        inOrder.verify(bridgeEventLogger, times(1)).logNonRefundablePegin(btcTransaction, NonRefundablePeginReason.REFUND_RELEASE_NOT_BUILT);
         verify(bridgeEventLogger, never()).logReleaseBtcRequested(any(), any(), any());
-        verify(bridgeEventLogger, times(1)).logPeginBtc(eq(destinationRskAddress), eq(btcTransaction), eq(minimumPeginTxValue), eq(3));
+        verify(bridgeEventLogger, never()).logPeginBtc(any(), any(), any(), anyInt());
+        verify(repository, never()).transfer(any(), any(), any());
         verify(bridgeStorageProvider, times(1)).setHeightBtcTxhashAlreadyProcessed(btcTransaction.getHash(false), rskExecutionBlock.getNumber());
         assertTrue(pegoutsWaitingForConfirmations.getEntries().isEmpty());
-        assertFalse(activeFederationUtxos.isEmpty());
+        assertTrue(activeFederationUtxos.isEmpty());
+    }
+
+    @Test
+    void pegin_v3_requireCode_destinationWithoutCode_rejectionIsLoggedBeforeTheReleaseRequest() throws BlockStoreException, BridgeIllegalArgumentException, IOException {
+        Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
+        BtcTransaction btcTransaction = buildPeginV3Tx(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
+
+        registerV3(btcTransaction, allActivations, false);
+
+        InOrder inOrder = inOrder(bridgeEventLogger);
+        inOrder.verify(bridgeEventLogger, times(1)).logRejectedPegin(btcTransaction, PEGIN_DESTINATION_HAS_NO_CODE);
+        inOrder.verify(bridgeEventLogger, times(1)).logReleaseBtcRequested(any(), any(), eq(Coin.COIN));
+        verify(repository, never()).transfer(any(), any(), any());
+    }
+
+    @Test
+    void pegin_v3_requireCode_twoOutputsToOneFederation_destinationWithoutCode_refundSpendsBoth() throws BlockStoreException, BridgeIllegalArgumentException, IOException {
+        Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
+        BtcTransaction btcTransaction = buildPeginV3Tx(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
+        btcTransaction.addOutput(Coin.COIN, activeFederation.getAddress());
+        Coin sentAmount = Coin.COIN.multiply(2);
+
+        registerV3(btcTransaction, allActivations, false);
+
+        assertPeginIsRejectedAndRefunded(allActivations, btcTransaction, sentAmount, PEGIN_DESTINATION_HAS_NO_CODE);
+        BtcTransaction release = pegoutsWaitingForConfirmations.getEntries().iterator().next().getBtcTransaction();
+        assertEquals(2, release.getInputs().size());
+        assertEquals(1, release.getOutputs().size());
+        assertEquals(ScriptBuilder.createOutputScript(refund), release.getOutput(0).getScriptPubKey());
+        assertTrue(release.getOutput(0).getValue().isLessThan(sentAmount));
+        assertTrue(release.getOutput(0).getValue().isGreaterThan(Coin.COIN));
+    }
+
+    @Test
+    void pegin_v3_requireCode_destinationWithoutCode_errorWhileBuildingTheRefund_abortsAndCanBeRegisteredAgain() throws BlockStoreException, BridgeIllegalArgumentException, IOException {
+        // Anything thrown while the refund is being built is an internal error: the call fails (the Bridge turns
+        // it into a VMException and saves nothing), with no event logged and the deposit not marked as processed
+        Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
+        BtcTransaction btcTransaction = buildPeginV3Tx(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
+        int height = heightAtWhichToStartUsingPegoutIndex;
+        PartialMerkleTree pmt = createPmtAndMockBlockStore(btcTransaction, height);
+        BridgeSupport bridgeSupport = buildBridgeSupport(allActivations);
+        when(repository.getCode(destinationRskAddress)).thenReturn(new byte[0]);
+        // the fee is read when the release is built: fail the first read only
+        when(repository.getStorageBytes(any(), eq(co.rsk.peg.feeperkb.FeePerKbStorageIndexKey.FEE_PER_KB.getKey())))
+            .thenThrow(new IllegalStateException("storage fault"))
+            .thenReturn((byte[]) null);
+        byte[] btcTxSerialized = btcTransaction.bitcoinSerialize();
+        byte[] pmtSerialized = pmt.bitcoinSerialize();
+
+        assertThrows(IllegalStateException.class, () -> bridgeSupport.registerBtcTransaction(rskTx, btcTxSerialized, height, pmtSerialized));
+
+        verifyNoInteractions(bridgeEventLogger);
+        verify(bridgeStorageProvider, never()).setHeightBtcTxhashAlreadyProcessed(any(), anyLong());
+        verify(repository, never()).transfer(any(), any(), any());
+        assertTrue(pegoutsWaitingForConfirmations.getEntries().isEmpty());
+        assertTrue(activeFederationUtxos.isEmpty());
+
+        // the fault is gone: registering the same deposit again refunds it normally
+        bridgeSupport.registerBtcTransaction(rskTx, btcTxSerialized, height, pmtSerialized);
+
+        assertPeginIsRejectedAndRefunded(allActivations, btcTransaction, Coin.COIN, PEGIN_DESTINATION_HAS_NO_CODE);
+    }
+
+    @Test
+    void pegin_v3_requireCode_destinationWithoutCode_utxoProviderException_abortsAndCanBeRegisteredAgain() throws BlockStoreException, BridgeIllegalArgumentException, IOException {
+        // UTXO_PROVIDER_EXCEPTION is not one of the four construction failures: an internal error, as above
+        Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
+        BtcTransaction btcTransaction = buildPeginV3Tx(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
+        int height = heightAtWhichToStartUsingPegoutIndex;
+        PartialMerkleTree pmt = createPmtAndMockBlockStore(btcTransaction, height);
+        BridgeSupport bridgeSupport = buildBridgeSupport(allActivations);
+        when(repository.getCode(destinationRskAddress)).thenReturn(new byte[0]);
+        byte[] btcTxSerialized = btcTransaction.bitcoinSerialize();
+        byte[] pmtSerialized = pmt.bitcoinSerialize();
+
+        ReleaseTransactionBuilder.BuildResult utxoProviderFailure =
+            new ReleaseTransactionBuilder.BuildResult(null, null, ReleaseTransactionBuilder.Response.UTXO_PROVIDER_EXCEPTION);
+        try (MockedConstruction<ReleaseTransactionBuilder> ignored = mockConstruction(
+            ReleaseTransactionBuilder.class,
+            (builder, context) -> when(builder.buildEmptyWalletTo(any(Script.class))).thenReturn(utxoProviderFailure)
+        )) {
+            assertThrows(IllegalStateException.class, () -> bridgeSupport.registerBtcTransaction(rskTx, btcTxSerialized, height, pmtSerialized));
+        }
+
+        verifyNoInteractions(bridgeEventLogger);
+        verify(bridgeStorageProvider, never()).setHeightBtcTxhashAlreadyProcessed(any(), anyLong());
+        verify(repository, never()).transfer(any(), any(), any());
+        assertTrue(pegoutsWaitingForConfirmations.getEntries().isEmpty());
+        assertTrue(activeFederationUtxos.isEmpty());
+
+        // with the real builder back, registering the same deposit again refunds it normally
+        bridgeSupport.registerBtcTransaction(rskTx, btcTxSerialized, height, pmtSerialized);
+
+        assertPeginIsRejectedAndRefunded(allActivations, btcTransaction, Coin.COIN, PEGIN_DESTINATION_HAS_NO_CODE);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ReleaseTransactionBuilder.Response.class, names = {"INSUFFICIENT_MONEY", "COULD_NOT_ADJUST_DOWNWARDS", "DUSTY_SEND_REQUESTED", "EXCEED_MAX_TRANSACTION_SIZE"})
+    void pegin_v3_requireCode_destinationWithoutCode_anyConstructionFailure_isUnrefundableAndNeverCredited(ReleaseTransactionBuilder.Response failure) throws BlockStoreException, BridgeIllegalArgumentException, IOException {
+        Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
+        BtcTransaction btcTransaction = buildPeginV3Tx(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
+        int height = heightAtWhichToStartUsingPegoutIndex;
+        PartialMerkleTree pmt = createPmtAndMockBlockStore(btcTransaction, height);
+        BridgeSupport bridgeSupport = buildBridgeSupport(allActivations);
+        when(repository.getCode(destinationRskAddress)).thenReturn(new byte[0]);
+
+        ReleaseTransactionBuilder.BuildResult buildFailure = new ReleaseTransactionBuilder.BuildResult(null, null, failure);
+        try (MockedConstruction<ReleaseTransactionBuilder> ignored = mockConstruction(
+            ReleaseTransactionBuilder.class,
+            (builder, context) -> when(builder.buildEmptyWalletTo(any(Script.class))).thenReturn(buildFailure)
+        )) {
+            bridgeSupport.registerBtcTransaction(rskTx, btcTransaction.bitcoinSerialize(), height, pmt.bitcoinSerialize());
+        }
+
+        InOrder inOrder = inOrder(bridgeEventLogger);
+        inOrder.verify(bridgeEventLogger, times(1)).logRejectedPegin(btcTransaction, PEGIN_DESTINATION_HAS_NO_CODE);
+        inOrder.verify(bridgeEventLogger, times(1)).logNonRefundablePegin(btcTransaction, NonRefundablePeginReason.REFUND_RELEASE_NOT_BUILT);
+        verify(bridgeEventLogger, never()).logReleaseBtcRequested(any(), any(), any());
+        verify(bridgeEventLogger, never()).logPeginBtc(any(), any(), any(), anyInt());
+        verify(repository, never()).transfer(any(), any(), any());
+        verify(bridgeStorageProvider, times(1)).setHeightBtcTxhashAlreadyProcessed(btcTransaction.getHash(false), rskExecutionBlock.getNumber());
+        assertTrue(pegoutsWaitingForConfirmations.getEntries().isEmpty());
+        assertTrue(activeFederationUtxos.isEmpty());
+    }
+
+    // --- A flagged deposit paying both live federations, to a destination without code: unrefundable, no release ---
+
+    private void assertV3DepositToBothFederationsIsUnrefundable(BtcTransaction btcTransaction) throws IOException {
+        InOrder inOrder = inOrder(bridgeEventLogger);
+        inOrder.verify(bridgeEventLogger, times(1)).logRejectedPegin(btcTransaction, PEGIN_DESTINATION_HAS_NO_CODE);
+        inOrder.verify(bridgeEventLogger, times(1)).logNonRefundablePegin(btcTransaction, NonRefundablePeginReason.OUTPUTS_SENT_TO_DIFFERENT_FEDS);
+        verify(bridgeEventLogger, never()).logReleaseBtcRequested(any(), any(), any());
+        verify(bridgeEventLogger, never()).logPeginBtc(any(), any(), any(), anyInt());
+        verify(repository, never()).transfer(any(), any(), any());
+        verify(bridgeStorageProvider, times(1)).setHeightBtcTxhashAlreadyProcessed(btcTransaction.getHash(false), rskExecutionBlock.getNumber());
+        assertTrue(pegoutsWaitingForConfirmations.getEntries().isEmpty());
+        assertTrue(activeFederationUtxos.isEmpty());
+        assertTrue(retiringFederationUtxos.isEmpty());
+    }
+
+    @Test
+    void pegin_v3_requireCode_outputsToActiveAndRetiringFederations_destinationWithoutCode_isUnrefundable() throws BlockStoreException, BridgeIllegalArgumentException, IOException {
+        // active and retiring federations of the same script format (both P2SH ERP)
+        when(federationStorageProvider.getOldFederation(federationMainnetConstants, allActivations)).thenReturn(retiringFederation);
+        Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
+        BtcTransaction btcTransaction = buildPeginV3Tx(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
+        btcTransaction.addOutput(Coin.COIN, retiringFederation.getAddress());
+
+        registerV3(btcTransaction, allActivations, false);
+
+        assertV3DepositToBothFederationsIsUnrefundable(btcTransaction);
+    }
+
+    @Test
+    void pegin_v3_requireCode_outputsToActiveAndRetiringFederationsOfDifferentFormats_destinationWithoutCode_isUnrefundable() throws BlockStoreException, BridgeIllegalArgumentException, IOException {
+        // the retiring federation is P2SH ERP, the active one P2SH-P2WSH ERP
+        activeFederation = P2shP2wshErpFederationBuilder.builder()
+            .withCreationBlockNumber(activeFederation.getCreationBlockNumber())
+            .build();
+        when(federationStorageProvider.getNewFederation(any(FederationConstants.class), any(ActivationConfig.ForBlock.class)))
+            .thenReturn(activeFederation);
+        when(federationStorageProvider.getOldFederation(federationMainnetConstants, allActivations)).thenReturn(retiringFederation);
+        Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
+        BtcTransaction btcTransaction = buildPeginV3Tx(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
+        btcTransaction.addOutput(Coin.COIN, retiringFederation.getAddress());
+
+        registerV3(btcTransaction, allActivations, false);
+
+        assertV3DepositToBothFederationsIsUnrefundable(btcTransaction);
+    }
+
+    @Test
+    void pegin_v3_requireCode_outputsToActiveAndRetiringFederations_destinationWithCode_isCredited() throws BlockStoreException, BridgeIllegalArgumentException, IOException {
+        when(federationStorageProvider.getOldFederation(federationMainnetConstants, allActivations)).thenReturn(retiringFederation);
+        Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
+        BtcTransaction btcTransaction = buildPeginV3Tx(destinationRskAddress, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
+        btcTransaction.addOutput(Coin.COIN, retiringFederation.getAddress());
+
+        registerV3(btcTransaction, allActivations, true);
+
+        verify(bridgeEventLogger, never()).logRejectedPegin(any(), any());
+        verify(bridgeEventLogger, never()).logNonRefundablePegin(any(), any());
+        verify(bridgeEventLogger, times(1)).logPeginBtc(eq(destinationRskAddress), eq(btcTransaction), eq(Coin.COIN.multiply(2)), eq(3));
+        verify(bridgeStorageProvider, times(1)).setHeightBtcTxhashAlreadyProcessed(btcTransaction.getHash(false), rskExecutionBlock.getNumber());
+        assertEquals(1, activeFederationUtxos.size());
+        assertEquals(1, retiringFederationUtxos.size());
+        assertTrue(pegoutsWaitingForConfirmations.getEntries().isEmpty());
     }
 
     @Test
@@ -3899,11 +4265,20 @@ class BridgeSupportRegisterBtcTransactionTest {
         assertCreditedAsVersion3(btcTransaction);
     }
 
-    @Test
-    void pegin_v3_requireCode_precompileDestination_isCredited() throws BlockStoreException, BridgeIllegalArgumentException, IOException {
-        // A precompiled contract counts as having code even though the repository holds none for it
+    private static Stream<RskAddress> precompiledContractAddresses() {
+        return Stream.concat(
+            PrecompiledContracts.GENESIS_ADDRESSES.stream(),
+            PrecompiledContracts.CONSENSUS_ENABLED_ADDRESSES.keySet().stream()
+        );
+    }
+
+    @ParameterizedTest
+    @MethodSource("precompiledContractAddresses")
+    void pegin_v3_requireCode_activePrecompileDestination_isCredited(RskAddress precompile) throws BlockStoreException, BridgeIllegalArgumentException, IOException {
+        // A precompiled contract active at the registering block counts as having code even though the repository
+        // holds none for it, whether it exists since genesis or was enabled by a later consensus rule
         Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
-        BtcTransaction btcTransaction = buildPeginV3Tx(bridgeContractAddress, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
+        BtcTransaction btcTransaction = buildPeginV3Tx(precompile, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
         int height = heightAtWhichToStartUsingPegoutIndex;
         PartialMerkleTree pmt = createPmtAndMockBlockStore(btcTransaction, height);
         BridgeSupport bridgeSupport = buildBridgeSupport(allActivations);
@@ -3912,8 +4287,38 @@ class BridgeSupportRegisterBtcTransactionTest {
         bridgeSupport.registerBtcTransaction(rskTx, btcTransaction.bitcoinSerialize(), height, pmt.bitcoinSerialize());
 
         verify(bridgeEventLogger, never()).logRejectedPegin(any(), any());
-        verify(bridgeEventLogger, times(1)).logPeginBtc(eq(bridgeContractAddress), eq(btcTransaction), eq(Coin.COIN), eq(3));
+        verify(bridgeEventLogger, times(1)).logPeginBtc(eq(precompile), eq(btcTransaction), eq(Coin.COIN), eq(3));
         assertTrue(pegoutsWaitingForConfirmations.getEntries().isEmpty());
+    }
+
+    private static Stream<Arguments> consensusEnabledPrecompiles() {
+        return PrecompiledContracts.CONSENSUS_ENABLED_ADDRESSES.entrySet().stream()
+            .map(entry -> Arguments.of(entry.getKey(), entry.getValue()));
+    }
+
+    @ParameterizedTest
+    @MethodSource("consensusEnabledPrecompiles")
+    void pegin_v3_requireCode_inactivePrecompileDestination_isRefunded(RskAddress precompile, ConsensusRule enablingRule) throws BlockStoreException, BridgeIllegalArgumentException, IOException {
+        // The address of a precompiled contract whose consensus rule is not active gets no special treatment
+        ActivationConfig.ForBlock activations = ActivationConfigsForTest.allBut(enablingRule).forBlock(0);
+        Address refund = BitcoinTestUtils.createP2PKHAddress(btcMainnetParams, "v3refund");
+        BtcTransaction btcTransaction = buildPeginV3Tx(precompile, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(refund), new BtcECKey());
+        int height = heightAtWhichToStartUsingPegoutIndex;
+        PartialMerkleTree pmt = createPmtAndMockBlockStore(btcTransaction, height);
+        BridgeSupport bridgeSupport = buildBridgeSupport(activations);
+        when(repository.getCode(any())).thenReturn(new byte[0]);
+
+        bridgeSupport.registerBtcTransaction(rskTx, btcTransaction.bitcoinSerialize(), height, pmt.bitcoinSerialize());
+
+        InOrder inOrder = inOrder(bridgeEventLogger);
+        inOrder.verify(bridgeEventLogger, times(1)).logRejectedPegin(btcTransaction, PEGIN_DESTINATION_HAS_NO_CODE);
+        inOrder.verify(bridgeEventLogger, times(1)).logReleaseBtcRequested(any(), any(), eq(Coin.COIN));
+        verify(bridgeEventLogger, never()).logNonRefundablePegin(any(), any());
+        verify(bridgeEventLogger, never()).logPeginBtc(any(), any(), any(), anyInt());
+        verify(bridgeStorageProvider, times(1)).setHeightBtcTxhashAlreadyProcessed(btcTransaction.getHash(false), rskExecutionBlock.getNumber());
+        assertEquals(1, pegoutsWaitingForConfirmations.getEntries().size());
+        BtcTransaction release = pegoutsWaitingForConfirmations.getEntries().iterator().next().getBtcTransaction();
+        assertEquals(ScriptBuilder.createOutputScript(refund), release.getOutput(0).getScriptPubKey());
     }
 
     @Test

@@ -78,55 +78,57 @@ class PeginInstructionsVersion3Test {
         assertThrows(PeginInstructionsParseException.class, () -> parse(payload));
     }
 
-    // --- REFUND_TO_CHANGE ---
-
-    @Test
-    void parse_refundToChange_withRequireCode_26Bytes() throws PeginInstructionsParseException {
-        int flags = PeginInstructionsVersion3.REQUIRE_CODE | PeginInstructionsVersion3.REFUND_TO_CHANGE;
-        byte[] payload = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, flags, Optional.empty()));
-        assertEquals(26, payload.length);
+    @ParameterizedTest
+    @ValueSource(ints = {0x00, 0x01})
+    void parse_with32ByteProgramRefund_59Bytes(int flags) throws PeginInstructionsParseException {
+        byte[] program = new byte[32];
+        java.util.Arrays.fill(program, (byte) 0xab);
+        byte[] payload = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, flags, Optional.of(PeginRefundScriptType.P2TR), program));
+        assertEquals(59, payload.length);
 
         PeginInstructionsVersion3 instructions = parse(payload);
 
-        assertEquals(rskDestination, instructions.getRskDestinationAddress());
-        assertEquals(0x03, instructions.getFlags());
-        assertTrue(instructions.requiresCode());
-        assertTrue(instructions.refundsToChange());
-        assertTrue(instructions.getBtcRefundScript().isEmpty());
-        assertTrue(instructions.getBtcRefundAddress().isEmpty());
+        assertEquals(flags, instructions.getFlags());
+        assertEquals(flags == PeginInstructionsVersion3.REQUIRE_CODE, instructions.requiresCode());
+        assertEquals(Optional.of(PeginRefundScriptType.P2TR.buildOutputScript(program)), instructions.getBtcRefundScript());
     }
 
     @Test
-    void parse_refundToChange_withoutRequireCode_isParseFailure() {
-        byte[] payload = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, PeginInstructionsVersion3.REFUND_TO_CHANGE, Optional.empty()));
-        assertThrows(PeginInstructionsParseException.class, () -> parse(payload));
-        byte[] withRefund = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, PeginInstructionsVersion3.REFUND_TO_CHANGE, Optional.of(p2pkhRefund)));
-        assertThrows(PeginInstructionsParseException.class, () -> parse(withRefund));
-    }
-
-    @Test
-    void parse_refundToChange_withRefundSlot_isParseFailure() {
-        int flags = PeginInstructionsVersion3.REQUIRE_CODE | PeginInstructionsVersion3.REFUND_TO_CHANGE;
-        byte[] payload = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, flags, Optional.of(p2pkhRefund)));
+    void parse_requireCode_withP2pkhRefund_47Bytes() throws PeginInstructionsParseException {
+        byte[] payload = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(p2pkhRefund)));
         assertEquals(47, payload.length);
-        assertThrows(PeginInstructionsParseException.class, () -> parse(payload));
+
+        PeginInstructionsVersion3 instructions = parse(payload);
+
+        assertEquals(0x01, instructions.getFlags());
+        assertTrue(instructions.requiresCode());
+        assertEquals(Optional.of(p2pkhRefund), instructions.getBtcRefundAddress());
     }
 
-    @Test
-    void parse_requireCode_withoutChangeFlag_stillNeedsTheSlot() throws PeginInstructionsParseException {
-        byte[] withSlot = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, PeginInstructionsVersion3.REQUIRE_CODE, Optional.of(p2pkhRefund)));
-        assertFalse(parse(withSlot).refundsToChange());
-        byte[] withoutSlot = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, PeginInstructionsVersion3.REQUIRE_CODE, Optional.empty()));
-        assertThrows(PeginInstructionsParseException.class, () -> parse(withoutSlot));
+    // Bits 1-7 are reserved: 0x02 and 0x03 (the REFUND_TO_CHANGE bit of an earlier draft) are parse failures too
+    @ParameterizedTest
+    @ValueSource(ints = {0x02, 0x03, 0x04, 0x05, 0x08, 0x10, 0x20, 0x40, 0x80, 0x81, 0xfe, 0xff})
+    void parse_reservedFlagBits_areParseFailure(int flags) {
+        byte[] withoutRefund = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, flags, Optional.empty()));
+        assertEquals(26, withoutRefund.length);
+        assertThrows(PeginInstructionsParseException.class, () -> parse(withoutRefund));
+        byte[] with20ByteRefund = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, flags, Optional.of(p2pkhRefund)));
+        assertEquals(47, with20ByteRefund.length);
+        assertThrows(PeginInstructionsParseException.class, () -> parse(with20ByteRefund));
+        byte[] with32ByteRefund = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, flags, Optional.of(PeginRefundScriptType.P2TR), new byte[32]));
+        assertEquals(59, with32ByteRefund.length);
+        assertThrows(PeginInstructionsParseException.class, () -> parse(with32ByteRefund));
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {0x04, 0x80, 0xfc, 0xff})
-    void parse_reservedFlagBits_areParseFailure(int flags) {
-        byte[] withRefund = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, flags, Optional.of(p2pkhRefund)));
-        assertThrows(PeginInstructionsParseException.class, () -> parse(withRefund));
-        byte[] withoutRefund = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, flags, Optional.empty()));
-        assertThrows(PeginInstructionsParseException.class, () -> parse(withoutRefund));
+    @EnumSource(PeginRefundScriptType.class)
+    void parse_anyV2RefundType_withTheOtherProgramLength_isParseFailure(PeginRefundScriptType type) {
+        // 20 and 32 bytes are the only program lengths a payload can carry: each type accepts exactly one of them
+        int wrongLength = type.getProgramLength() == 20 ? 32 : 20;
+        for (int flags : new int[]{0x00, PeginInstructionsVersion3.REQUIRE_CODE}) {
+            byte[] payload = payloadFor(PegTestUtils.createOpReturnScriptForRskV3(rskDestination, flags, Optional.of(type), new byte[wrongLength]));
+            assertThrows(PeginInstructionsParseException.class, () -> parse(payload), type + " flags " + flags);
+        }
     }
 
     @ParameterizedTest

@@ -9,7 +9,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import co.rsk.bitcoinj.core.*;
-import co.rsk.bitcoinj.script.Script;
 import co.rsk.bitcoinj.script.ScriptBuilder;
 import co.rsk.bitcoinj.wallet.Wallet;
 import co.rsk.peg.constants.BridgeConstants;
@@ -17,6 +16,7 @@ import co.rsk.peg.constants.BridgeMainNetConstants;
 import co.rsk.peg.bitcoin.BitcoinTestUtils;
 import co.rsk.peg.btcLockSender.BtcLockSender;
 import co.rsk.peg.federation.Federation;
+import co.rsk.peg.federation.P2shP2wshErpFederationBuilder;
 import co.rsk.peg.pegin.PeginEvaluationResult;
 import co.rsk.peg.pegin.PeginProcessAction;
 import co.rsk.peg.pegin.RejectedPeginReason;
@@ -340,109 +340,78 @@ class PegUtilsEvaluatePeginTest {
         assertEquals(RejectedPeginReason.INVALID_AMOUNT, result.getRejectedPeginReason().orElseThrow());
     }
 
-    // --- REFUND_TO_CHANGE, the refund is the deposit's change output ---
+    @Test
+    void evaluatePegin_v3_requireCode_twoOutputsToOneFederation_destinationHasNoCode_refunds() throws PeginInstructionsException {
+        BtcTransaction btcTx = validPeginTx();
+        btcTx.addOutput(minimumPegInTxValue, activeFederation.getAddress());
 
-    private PeginInformation peginInformationV3ToChange() throws PeginInstructionsException {
-        PeginInformation peginInformation = mock(PeginInformation.class);
-        when(peginInformation.getProtocolVersion()).thenReturn(3);
-        when(peginInformation.requiresCodeAtDestination()).thenReturn(true);
-        when(peginInformation.refundsToChange()).thenReturn(true);
-        when(peginInformation.getRskDestinationAddress()).thenReturn(new co.rsk.core.RskAddress(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}));
-        when(peginInformation.getBtcRefundScript()).thenReturn(null); // nothing in the payload, nothing sender-derived
-        return peginInformation;
+        PeginEvaluationResult result = PegUtils.evaluatePegin(btcTx, peginInformationV3(true), minimumPegInTxValue, activeFedWallet, activations, address -> false);
+
+        assertEquals(PeginProcessAction.REFUND, result.getPeginProcessAction());
+        assertEquals(RejectedPeginReason.PEGIN_DESTINATION_HAS_NO_CODE, result.getRejectedPeginReason().orElseThrow());
     }
 
-    private static Script opReturn(byte[] data) {
-        return new ScriptBuilder().op(co.rsk.bitcoinj.script.ScriptOpCodes.OP_RETURN).data(data).build();
-    }
+    // --- A deposit paying more than one live federation (active and retiring) ---
 
-    private static Stream<Arguments> changeScripts() {
+    private static Stream<Arguments> retiringFederations() {
+        List<BtcECKey> retiringFedSigners = BitcoinTestUtils.getBtcEcKeysFromSeeds(
+            new String[]{"fb01", "fb02", "fb03", "fb04", "fb05"}, true
+        );
         return Stream.of(
-            Arguments.of("p2pkh", ScriptBuilder.createOutputScript(BitcoinTestUtils.createP2PKHAddress(networkParameters, "change"))),
-            Arguments.of("p2wpkh", new ScriptBuilder().smallNum(0).data(new byte[20]).build()),
-            Arguments.of("p2tr", new ScriptBuilder().smallNum(1).data(new byte[32]).build())
+            Arguments.of("same script format", createP2shErpFederation(bridgeMainnetConstants.getFederationConstants(), retiringFedSigners)),
+            Arguments.of("different script format", P2shP2wshErpFederationBuilder.builder().build())
         );
     }
 
-    @ParameterizedTest
-    @MethodSource("changeScripts")
-    void evaluatePegin_v3_refundToChange_oneChangeOutput_refundsToIt(String name, Script change) throws PeginInstructionsException {
+    private BtcTransaction peginTxToBothFederations(Federation retiringFederation) {
         BtcTransaction btcTx = validPeginTx();
-        btcTx.addOutput(Coin.ZERO, opReturn(new byte[]{0x52, 0x53, 0x4b, 0x54, 0x03}));
-        btcTx.addOutput(Coin.valueOf(12_345), change);
-        PeginInformation peginInformation = peginInformationV3ToChange();
-
-        PeginEvaluationResult result = PegUtils.evaluatePegin(btcTx, peginInformation, minimumPegInTxValue, activeFedWallet, activations, address -> false);
-
-        assertEquals(PeginProcessAction.REFUND, result.getPeginProcessAction(), name);
-        assertEquals(RejectedPeginReason.PEGIN_DESTINATION_HAS_NO_CODE, result.getRejectedPeginReason().orElseThrow());
-        org.mockito.Mockito.verify(peginInformation).setBtcRefundScript(change);
+        btcTx.addOutput(minimumPegInTxValue, retiringFederation.getAddress());
+        btcTx.addOutput(Coin.ZERO, ScriptBuilder.createOpReturnScript(new byte[]{0x52, 0x53, 0x4b, 0x54, 0x03}));
+        return btcTx;
     }
 
-    @Test
-    void evaluatePegin_v3_refundToChange_noChangeOutput_credits() throws PeginInstructionsException {
-        BtcTransaction btcTx = validPeginTx();
-        btcTx.addOutput(Coin.ZERO, opReturn(new byte[]{0x52, 0x53, 0x4b, 0x54, 0x03}));
-        PeginInformation peginInformation = peginInformationV3ToChange();
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("retiringFederations")
+    void evaluatePegin_v3_requireCode_outputsToBothLiveFederations_destinationHasNoCode_isNotRefunded(String name, Federation retiringFederation) throws PeginInstructionsException {
+        Wallet liveFedsWallet = new BridgeBtcWallet(context, List.of(activeFederation, retiringFederation));
 
-        PeginEvaluationResult result = PegUtils.evaluatePegin(btcTx, peginInformation, minimumPegInTxValue, activeFedWallet, activations, address -> false);
+        PeginEvaluationResult result = PegUtils.evaluatePegin(peginTxToBothFederations(retiringFederation), peginInformationV3(true), minimumPegInTxValue, liveFedsWallet, activations, address -> false);
+
+        assertEquals(PeginProcessAction.NO_REFUND, result.getPeginProcessAction());
+        assertEquals(RejectedPeginReason.PEGIN_DESTINATION_HAS_NO_CODE, result.getRejectedPeginReason().orElseThrow());
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("retiringFederations")
+    void evaluatePegin_v3_requireCode_outputsToBothLiveFederations_destinationHasCode_registers(String name, Federation retiringFederation) throws PeginInstructionsException {
+        Wallet liveFedsWallet = new BridgeBtcWallet(context, List.of(activeFederation, retiringFederation));
+
+        PeginEvaluationResult result = PegUtils.evaluatePegin(peginTxToBothFederations(retiringFederation), peginInformationV3(true), minimumPegInTxValue, liveFedsWallet, activations, address -> true);
 
         assertEquals(PeginProcessAction.REGISTER, result.getPeginProcessAction());
         assertTrue(result.getRejectedPeginReason().isEmpty());
-        org.mockito.Mockito.verify(peginInformation, org.mockito.Mockito.never()).setBtcRefundScript(org.mockito.ArgumentMatchers.any());
     }
 
-    @Test
-    void evaluatePegin_v3_refundToChange_twoChangeOutputs_credits() throws PeginInstructionsException {
-        BtcTransaction btcTx = validPeginTx();
-        btcTx.addOutput(Coin.ZERO, opReturn(new byte[]{0x52, 0x53, 0x4b, 0x54, 0x03}));
-        btcTx.addOutput(Coin.valueOf(12_345), ScriptBuilder.createOutputScript(BitcoinTestUtils.createP2PKHAddress(networkParameters, "alice")));
-        btcTx.addOutput(Coin.valueOf(1_000), ScriptBuilder.createOutputScript(BitcoinTestUtils.createP2PKHAddress(networkParameters, "attacker")));
-        PeginInformation peginInformation = peginInformationV3ToChange();
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("retiringFederations")
+    void evaluatePegin_v3_flagClear_outputsToBothLiveFederations_registers(String name, Federation retiringFederation) throws PeginInstructionsException {
+        Wallet liveFedsWallet = new BridgeBtcWallet(context, List.of(activeFederation, retiringFederation));
 
-        PeginEvaluationResult result = PegUtils.evaluatePegin(btcTx, peginInformation, minimumPegInTxValue, activeFedWallet, activations, address -> false);
+        PeginEvaluationResult result = PegUtils.evaluatePegin(peginTxToBothFederations(retiringFederation), peginInformationV3(false), minimumPegInTxValue, liveFedsWallet, activations,
+            address -> { throw new AssertionError("code must not be looked up when the flag is clear"); });
 
         assertEquals(PeginProcessAction.REGISTER, result.getPeginProcessAction());
-        org.mockito.Mockito.verify(peginInformation, org.mockito.Mockito.never()).setBtcRefundScript(org.mockito.ArgumentMatchers.any());
     }
 
-    @Test
-    void evaluatePegin_v3_refundToChange_destinationHasCode_registersWhateverTheOutputs() throws PeginInstructionsException {
-        BtcTransaction btcTx = validPeginTx();
-        btcTx.addOutput(Coin.valueOf(12_345), ScriptBuilder.createOutputScript(BitcoinTestUtils.createP2PKHAddress(networkParameters, "alice")));
-        PeginInformation peginInformation = peginInformationV3ToChange();
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("retiringFederations")
+    void evaluatePegin_v3_requireCode_retiringFederationLiveButNotPaid_destinationHasNoCode_refunds(String name, Federation retiringFederation) throws PeginInstructionsException {
+        Wallet liveFedsWallet = new BridgeBtcWallet(context, List.of(activeFederation, retiringFederation));
 
-        PeginEvaluationResult result = PegUtils.evaluatePegin(btcTx, peginInformation, minimumPegInTxValue, activeFedWallet, activations, address -> true);
-
-        assertEquals(PeginProcessAction.REGISTER, result.getPeginProcessAction());
-        org.mockito.Mockito.verify(peginInformation, org.mockito.Mockito.never()).setBtcRefundScript(org.mockito.ArgumentMatchers.any());
-    }
-
-    @Test
-    void evaluatePegin_v3_refundToChange_twoFederationOutputsAndOneChange_refundsToTheChange() throws PeginInstructionsException {
-        // a deposit split over two outputs to the (same) federation, plus one change: the federation outputs are not change
-        BtcTransaction btcTx = new BtcTransaction(networkParameters);
-        btcTx.addOutput(minimumPegInTxValue, activeFederation.getAddress());
-        btcTx.addOutput(minimumPegInTxValue, activeFederation.getAddress());
-        Script change = ScriptBuilder.createOutputScript(BitcoinTestUtils.createP2PKHAddress(networkParameters, "alice"));
-        btcTx.addOutput(Coin.valueOf(12_345), change);
-        PeginInformation peginInformation = peginInformationV3ToChange();
-
-        PeginEvaluationResult result = PegUtils.evaluatePegin(btcTx, peginInformation, minimumPegInTxValue, activeFedWallet, activations, address -> false);
+        PeginEvaluationResult result = PegUtils.evaluatePegin(validPeginTx(), peginInformationV3(true), minimumPegInTxValue, liveFedsWallet, activations, address -> false);
 
         assertEquals(PeginProcessAction.REFUND, result.getPeginProcessAction());
-        org.mockito.Mockito.verify(peginInformation).setBtcRefundScript(change);
-    }
-
-    @Test
-    void changeOutputScript_ignoresFederationAndOpReturnOutputs() {
-        BtcTransaction btcTx = validPeginTx();
-        assertTrue(PegUtils.changeOutputScript(btcTx, activeFedWallet).isEmpty());
-        btcTx.addOutput(Coin.ZERO, opReturn(new byte[]{1, 2, 3}));
-        assertTrue(PegUtils.changeOutputScript(btcTx, activeFedWallet).isEmpty());
-        Script change = new ScriptBuilder().smallNum(0).data(new byte[20]).build();
-        btcTx.addOutput(Coin.valueOf(1), change);
-        assertEquals(java.util.Optional.of(change), PegUtils.changeOutputScript(btcTx, activeFedWallet));
+        assertEquals(RejectedPeginReason.PEGIN_DESTINATION_HAS_NO_CODE, result.getRejectedPeginReason().orElseThrow());
     }
 
     @Test

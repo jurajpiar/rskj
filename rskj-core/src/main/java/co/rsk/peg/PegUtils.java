@@ -297,51 +297,30 @@ public class PegUtils {
             logger.debug("[evaluatePeginVersion3] Destination {} has code, registering", destination);
             return new PeginEvaluationResult(PeginProcessAction.REGISTER);
         }
-        if (peginInformation.refundsToChange()) {
-            // the refund is the deposit's change output. None or several: credit instead,
-            // the same ending as a refund that cannot be built (the destination has no code, so the credit is
-            // parked by the destination's own rules).
-            Optional<Script> change = changeOutputScript(btcTx, fedWallet);
-            if (change.isEmpty()) {
-                logger.debug("[evaluatePeginVersion3] Destination {} has no code and the deposit has no single change output: crediting", destination);
-                return new PeginEvaluationResult(PeginProcessAction.REGISTER);
-            }
-            peginInformation.setBtcRefundScript(change.get());
-            logger.debug("[evaluatePeginVersion3] Destination {} has no code, refunding to the change output {}", destination, change.get());
-            return new PeginEvaluationResult(PeginProcessAction.REFUND, PEGIN_DESTINATION_HAS_NO_CODE);
+        if (hasOutputsToMoreThanOneLiveFederation(btcTx, fedWallet)) {
+            // A rejection release spending outputs of both live federations is not reliably signable
+            // (it completes and is valid only for some memberships, formats and signing orders),
+            // so it is not built: the deposit is unrefundable
+            logger.debug("[evaluatePeginVersion3] Destination {} has no code and the deposit pays more than one live federation, no refund", destination);
+            return new PeginEvaluationResult(PeginProcessAction.NO_REFUND, PEGIN_DESTINATION_HAS_NO_CODE);
         }
-        // The refund output is mandatory with REQUIRE_CODE (enforced at parse time), so this is always refundable;
-        // the guard only documents the invariant
-        PeginProcessAction action = peginInformation.getBtcRefundScript() != null
-            ? PeginProcessAction.REFUND
-            : PeginProcessAction.NO_REFUND;
-        logger.debug("[evaluatePeginVersion3] Destination {} has no code, {}", destination, action);
-        return new PeginEvaluationResult(action, PEGIN_DESTINATION_HAS_NO_CODE);
+        // The refund output is mandatory with REQUIRE_CODE (enforced at parse time), so there is always a refund script
+        logger.debug("[evaluatePeginVersion3] Destination {} has no code, refunding", destination);
+        return new PeginEvaluationResult(PeginProcessAction.REFUND, PEGIN_DESTINATION_HAS_NO_CODE);
     }
 
     /**
-     * The deposit's change output, if there is exactly one: an output that pays neither a live federation
-     * (as the federation wallet sees it) nor an OP_RETURN. Empty when there is none or more than one.
+     * Whether the deposit's outputs pay more than one live federation (active and retiring),
+     * whatever their script formats. Wider than {@link #hasOutputsToDifferentTypesOfFeds}.
      */
-    static Optional<Script> changeOutputScript(BtcTransaction btcTx, Wallet fedWallet) {
-        java.util.Set<Integer> federationOutputs = new java.util.HashSet<>();
+    private static boolean hasOutputsToMoreThanOneLiveFederation(BtcTransaction btcTx, Wallet fedWallet) {
+        Set<Federation> destinationFeds = new HashSet<>();
         for (TransactionOutput output : btcTx.getWalletOutputs(fedWallet)) {
-            federationOutputs.add(output.getIndex());
+            byte[] outputP2shScript = output.getScriptPubKey().getPubKeyHash();
+            Optional<Federation> destinationFed = ((BridgeBtcWallet) fedWallet).getDestinationFederation(outputP2shScript);
+            destinationFed.ifPresent(destinationFeds::add);
         }
-        Script change = null;
-        int count = 0;
-        for (TransactionOutput output : btcTx.getOutputs()) {
-            if (federationOutputs.contains(output.getIndex())) {
-                continue;
-            }
-            Script script = output.getScriptPubKey();
-            if (script.isOpReturn()) {
-                continue;
-            }
-            count++;
-            change = script;
-        }
-        return count == 1 ? Optional.of(change) : Optional.empty();
+        return destinationFeds.size() > 1;
     }
 
     private static PeginEvaluationResult evaluateLegacyPegin(BtcTransaction btcTx, Wallet fedWallet, TxSenderAddressType senderAddressType)  {
