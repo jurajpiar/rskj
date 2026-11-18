@@ -2346,6 +2346,138 @@ class BridgeSupportRegisterBtcTransactionTest {
             assertRefundWasCreated();
         }
 
+        // ------------------------------------------------------------------------------------------------
+        // Experiment (not a v3 test): a LEGACY peg-in from a P2SH multisig sender that pays both live
+        // federations of the SAME format. The existing rule refuses a refund only when the formats differ,
+        // so this deposit is refunded: a release spending both federations is queued and announced.
+        // What happens when the federators then sign it is printed (lines starting with V3STRICT-LEGACY2FED).
+        // Not real: the confirmation wait is skipped (the release is moved to the signing set directly).
+        // ------------------------------------------------------------------------------------------------
+
+        private List<BtcECKey> experimentKeys(String prefix, int from, int to) {
+            String[] seeds = new String[to - from + 1];
+            for (int i = from; i <= to; i++) {
+                seeds[i - from] = String.format("%s%02d", prefix, i);
+            }
+            return BitcoinTestUtils.getBtcEcKeysFromSeeds(seeds, true);
+        }
+
+        private String experimentEventName(LogInfo log) {
+            byte[] topic = log.getTopics().get(0).getData();
+            for (BridgeEvents event : BridgeEvents.values()) {
+                if (Arrays.equals(event.getEvent().encodeSignatureLong(), topic)) {
+                    return event.name();
+                }
+            }
+            return "unknown";
+        }
+
+        private void legacyPeginToBothFederationsOfTheSameFormat(String id, List<BtcECKey> retiringKeys, List<BtcECKey> activeKeys, List<BtcECKey> signers) throws Exception {
+            retiringFederation = P2shP2wshErpFederationBuilder.builder().withMembersBtcPublicKeys(retiringKeys).build();
+            activeFederation = P2shP2wshErpFederationBuilder.builder().withMembersBtcPublicKeys(activeKeys)
+                .withCreationBlockNumber(activeFedCreationBlockNumber).build();
+            setUp(allActivations);
+
+            BtcTransaction pegin = buildPeginFromP2shMultiSig();
+            pegin.addOutput(valueToSend, activeFederation.getAddress());
+            pegin.addOutput(valueToSend, retiringFederation.getAddress());
+            registerPegin(pegin);
+
+            List<String> registrationEvents = logs.stream().map(this::experimentEventName).toList();
+            int queued = bridgeStorageProvider.getPegoutsWaitingForConfirmations().getEntries().size();
+            boolean processed = bridgeStorageProvider.getHeightIfBtcTxhashIsAlreadyProcessed(pegin.getHash()).isPresent();
+            System.out.println("V3STRICT-LEGACY2FED [" + id + "] registration: events=" + registrationEvents + " releases queued=" + queued + " deposit processed=" + processed);
+            assertEquals(1, queued);
+            PegoutsWaitingForConfirmations.Entry entry = bridgeStorageProvider.getPegoutsWaitingForConfirmations().getEntries().iterator().next();
+            BtcTransaction release = entry.getBtcTransaction();
+            Keccak256 creationHash = entry.getPegoutCreationRskTxHash();
+            assertEquals(2, release.getInputs().size());
+
+            // skip the confirmation wait
+            bridgeStorageProvider.getPegoutsWaitingForSignatures().put(creationHash, release);
+            List<Coin> values = List.of(valueToSend, valueToSend);
+            int eventsBefore = logs.size();
+            Map<String, Integer> thrown = new LinkedHashMap<>();
+            int calls = 0;
+            for (BtcECKey signer : signers) {
+                BtcTransaction current = bridgeStorageProvider.getPegoutsWaitingForSignatures().get(creationHash);
+                if (current == null) {
+                    break;
+                }
+                List<byte[]> signatures = new ArrayList<>();
+                for (int i = 0; i < current.getInputs().size(); i++) {
+                    Sha256Hash sigHash = co.rsk.peg.bitcoin.BitcoinUtils.generateSigHashForSegwitTransactionInput(current, i, values.get(i));
+                    signatures.add(signer.sign(sigHash).encodeToDER());
+                }
+                calls++;
+                try {
+                    bridgeSupport.addSignature(BtcECKey.fromPublicOnly(signer.getPubKey()), signatures, creationHash);
+                } catch (RuntimeException e) {
+                    thrown.merge(e.getClass().getSimpleName() + ": " + e.getMessage(), 1, Integer::sum);
+                }
+            }
+            List<String> signingEvents = logs.subList(eventsBefore, logs.size()).stream().map(this::experimentEventName).toList();
+            boolean releaseBtc = signingEvents.contains("RELEASE_BTC");
+            boolean stillWaiting = bridgeStorageProvider.getPegoutsWaitingForSignatures().containsKey(creationHash);
+
+            // would Bitcoin accept each input? it needs exactly 5 signatures, each by a member of the federation the input spends
+            StringBuilder inputs = new StringBuilder();
+            boolean allInputsValid = true;
+            for (int i = 0; i < release.getInputs().size(); i++) {
+                Script redeem = co.rsk.peg.bitcoin.BitcoinUtils.extractRedeemScriptFromInput(release, i).orElseThrow();
+                boolean spendsActive = redeem.equals(activeFederation.getRedeemScript());
+                List<BtcECKey> members = spendsActive ? activeKeys : retiringKeys;
+                Sha256Hash sigHash = co.rsk.peg.bitcoin.BitcoinUtils.generateSigHashForSegwitTransactionInput(release, i, values.get(i));
+                TransactionWitness witness = release.getWitness(i);
+                int present = 0;
+                int byMembers = 0;
+                for (int j = 0; j < witness.getPushCount() - 1; j++) {
+                    byte[] push = witness.getPush(j);
+                    if (push.length > 60 && push.length < 75 && push[0] == 0x30) {
+                        present++;
+                        byte[] der = Arrays.copyOf(push, push.length - 1); // without the sighash type byte
+                        for (BtcECKey member : members) {
+                            try {
+                                if (member.verify(sigHash, BtcECKey.ECDSASignature.decodeFromDER(der))) {
+                                    byMembers++;
+                                    break;
+                                }
+                            } catch (RuntimeException ignored) {
+                                // not a signature by this member
+                            }
+                        }
+                    }
+                }
+                boolean valid = present == 5 && byMembers == 5; // exactly the threshold: an extra signature push fails the script
+                allInputsValid &= valid;
+                inputs.append(String.format(" input%d{spends=%s, signatures=%d, by its federation's members=%d, spendable=%s}",
+                    i, spendsActive ? "active" : "retiring", present, byMembers, valid));
+            }
+            System.out.println("V3STRICT-LEGACY2FED [" + id + "] signing: addSignature calls=" + calls + " events=" + signingEvents
+                + " release_btc=" + releaseBtc + " still waiting for signatures=" + stillWaiting + " calls that threw=" + thrown);
+            System.out.println("V3STRICT-LEGACY2FED [" + id + "] release:" + inputs + " => valid on Bitcoin=" + allInputsValid);
+        }
+
+        @Test
+        void experiment_legacyPeginToBothFederationsOfTheSameFormat() throws Exception {
+            List<BtcECKey> a = experimentKeys("member", 1, 9);
+            List<BtcECKey> b = experimentKeys("other", 1, 9);
+            List<BtcECKey> a8 = new ArrayList<>(experimentKeys("member", 1, 8));
+            BtcECKey newcomer = BitcoinTestUtils.getBtcEcKeyFromSeed("newcomer");
+            a8.add(newcomer);
+            a8.sort(BtcECKey.PUBKEY_COMPARATOR);
+
+            List<BtcECKey> everyone = new ArrayList<>(b);
+            everyone.addAll(a);
+            legacyPeginToBothFederationsOfTheSameFormat("disjoint", a, b, everyone);
+
+            List<BtcECKey> newcomerFirst = new ArrayList<>(List.of(newcomer));
+            newcomerFirst.addAll(experimentKeys("member", 1, 8));
+            legacyPeginToBothFederationsOfTheSameFormat("eight-shared, the new member signs first", a, a8, newcomerFirst);
+
+            legacyPeginToBothFederationsOfTheSameFormat("eight-shared, shared members sign first", a, a8, experimentKeys("member", 1, 8));
+        }
+
         private void assertPeginWasRejectedAndRefunded(int expectedAmountOfRefundInputs, BtcTransaction rejectedPegin) throws IOException {
             BtcTransaction pegout = getReleaseFromPegoutsWFC(bridgeStorageProvider);
             assertEquals(expectedAmountOfRefundInputs, pegout.getInputs().size());
