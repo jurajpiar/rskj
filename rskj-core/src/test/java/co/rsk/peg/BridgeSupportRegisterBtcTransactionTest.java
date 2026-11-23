@@ -2535,6 +2535,40 @@ class BridgeSupportRegisterBtcTransactionTest {
             legacyPeginToBothFederationsOfTheSameFormat("eight-shared, shared members sign first", a, a8, experimentKeys("member", 1, 8));
         }
 
+        // Experiment: the same kind of deposit, registered when the second federation is no longer live
+        // (the federation change has ended). Prints lines starting with V3STRICT-AFTERCHANGE.
+        @Test
+        void experiment_legacyPeginToActiveAndRetiredFederation_registeredAfterTheChange() throws Exception {
+            Federation retired = P2shP2wshErpFederationBuilder.builder().withMembersBtcPublicKeys(experimentKeys("member", 1, 9)).build();
+            retiringFederation = null; // no retiring federation: only the active one is live
+            activeFederation = P2shP2wshErpFederationBuilder.builder().withMembersBtcPublicKeys(experimentKeys("other", 1, 9))
+                .withCreationBlockNumber(activeFedCreationBlockNumber).build();
+            setUp(allActivations);
+
+            BtcTransaction pegin = buildPeginFromP2shMultiSig();
+            pegin.addOutput(valueToSend, activeFederation.getAddress());
+            pegin.addOutput(valueToSend, retired.getAddress());
+            registerPegin(pegin);
+
+            List<String> events = logs.stream().map(this::experimentEventName).toList();
+            var entries = bridgeStorageProvider.getPegoutsWaitingForConfirmations().getEntries(org.ethereum.config.blockchain.upgrades.ActivationConfigsForTest.all().forBlock(0));
+            boolean processed = bridgeStorageProvider.getHeightIfBtcTxhashIsAlreadyProcessed(pegin.getHash()).isPresent();
+            System.out.println("V3STRICT-AFTERCHANGE events=" + events + " releases queued=" + entries.size() + " deposit processed=" + processed);
+            assertEquals(1, entries.size());
+            BtcTransaction release = entries.iterator().next().getBtcTransaction();
+            StringBuilder inputs = new StringBuilder();
+            for (int i = 0; i < release.getInputs().size(); i++) {
+                var outpoint = release.getInput(i).getOutpoint();
+                Script redeem = co.rsk.peg.bitcoin.BitcoinUtils.extractRedeemScriptFromInput(release, i).orElseThrow();
+                inputs.append(" input").append(i).append("{deposit output ").append(outpoint.getIndex())
+                    .append(", spendsActive=").append(redeem.equals(activeFederation.getRedeemScript()))
+                    .append(", spendsRetired=").append(redeem.equals(retired.getRedeemScript())).append("}");
+            }
+            System.out.println("V3STRICT-AFTERCHANGE release inputs=" + release.getInputs().size() + inputs
+                + " outputValue=" + release.getOutput(0).getValue().value + " sentToActive=" + valueToSend.value
+                + " activeOutputIndex=" + (pegin.getOutputs().size() - 2) + " retiredOutputIndex=" + (pegin.getOutputs().size() - 1));
+        }
+
         private void assertPeginWasRejectedAndRefunded(int expectedAmountOfRefundInputs, BtcTransaction rejectedPegin) throws IOException {
             BtcTransaction pegout = getReleaseFromPegoutsWFC(bridgeStorageProvider);
             assertEquals(expectedAmountOfRefundInputs, pegout.getInputs().size());
