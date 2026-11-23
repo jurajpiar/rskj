@@ -502,7 +502,8 @@ public class BridgeSupport {
             peginInformation,
             minimumPeginTxValue,
             fedWallet,
-            activations
+            activations,
+            this::destinationHasCode
         );
 
         PeginProcessAction peginProcessAction = peginEvaluationResult.getPeginProcessAction();
@@ -512,16 +513,33 @@ public class BridgeSupport {
                 logger.debug("[{}] Peg-in is valid, going to register", METHOD_NAME);
                 executePegIn(btcTx, peginInformation, totalAmount);
             }
-            case REFUND -> handleRefundablePegin(btcTx, rskTxHash, peginEvaluationResult, peginInformation.getBtcRefundAddress());
+            case REFUND -> handleRefundablePegin(btcTx, rskTxHash, peginEvaluationResult, peginInformation.getBtcRefundScript());
             case NO_REFUND -> handleNonRefundablePegin(btcTx, peginInformation.getProtocolVersion(), peginEvaluationResult);
         }
+    }
+
+    /**
+     * Peg-in instructions v3 REQUIRE_CODE: "has code" means non-empty code in the state of the registering block
+     * (a contract created with zero-length runtime does not count); a precompiled contract active under the
+     * consensus rules of the registering block counts as having code. An inactive precompile address does not.
+     */
+    private boolean destinationHasCode(RskAddress destination) {
+        byte[] code = rskRepository.getCode(destination);
+        if (code != null && code.length > 0) {
+            return true;
+        }
+        if (PrecompiledContracts.GENESIS_ADDRESSES.contains(destination)) {
+            return true;
+        }
+        ConsensusRule enablingRule = PrecompiledContracts.CONSENSUS_ENABLED_ADDRESSES.get(destination);
+        return enablingRule != null && activations.isActive(enablingRule);
     }
 
     private void handleRefundablePegin(
         BtcTransaction btcTx,
         Keccak256 rskTxHash,
         PeginEvaluationResult peginEvaluationResult,
-        Address btcRefundAddress
+        Script btcRefundScript
     ) throws IOException {
 
         RejectedPeginReason rejectedPeginReason = peginEvaluationResult.getRejectedPeginReason()
@@ -533,11 +551,59 @@ public class BridgeSupport {
             });
 
         logger.debug("[{handleRefundablePegin}] Rejected peg-in, reason {}", rejectedPeginReason);
+        Coin totalAmount = computeTotalAmountSent(btcTx);
+        if (rejectedPeginReason == RejectedPeginReason.PEGIN_DESTINATION_HAS_NO_CODE) {
+            refundPeginToDestinationWithoutCode(btcTx, rskTxHash, btcRefundScript, totalAmount);
+            return;
+        }
         eventLogger.logRejectedPegin(btcTx, rejectedPeginReason);
 
-        logger.debug("[{handleRefundablePegin}] Refunding to address {} ", btcRefundAddress);
-        Coin totalAmount = computeTotalAmountSent(btcTx);
-        generateRejectionRelease(btcTx, btcRefundAddress, rskTxHash, totalAmount);
+        logger.debug("[{handleRefundablePegin}] Refunding to script {} ", btcRefundScript);
+        generateRejectionRelease(btcTx, btcRefundScript, rskTxHash, totalAmount);
+        markTxAsProcessed(btcTx);
+    }
+
+    /**
+     * Peg-in instructions v3, REQUIRE_CODE and no code at the destination: the peg-in is never credited.
+     * The release is built before anything is logged or queued, so that an internal error (any builder
+     * response other than the four construction failures, or anything thrown) aborts the call with no
+     * event and no state retained, leaving the deposit unprocessed. The events keep the order of every
+     * rejected peg-in: rejected_pegin, then release_requested or unrefundable_pegin.
+     */
+    private void refundPeginToDestinationWithoutCode(
+        BtcTransaction btcTx,
+        Keccak256 rskTxHash,
+        Script btcRefundScript,
+        Coin totalAmount
+    ) throws IOException {
+        logger.debug("[refundPeginToDestinationWithoutCode] Refunding to script {} ", btcRefundScript);
+        ReleaseTransactionBuilder.BuildResult buildResult = buildRejectionRelease(btcTx, btcRefundScript);
+        ReleaseTransactionBuilder.Response responseCode = buildResult.responseCode();
+        boolean releaseBuilt = switch (responseCode) {
+            case SUCCESS -> true;
+            case INSUFFICIENT_MONEY, COULD_NOT_ADJUST_DOWNWARDS, DUSTY_SEND_REQUESTED, EXCEED_MAX_TRANSACTION_SIZE -> false;
+            default -> {
+                // Not a property of the deposit. Thrown so the Bridge call fails and nothing is saved.
+                String message = String.format(
+                    "Internal error building the refund release for btc tx %s: %s",
+                    btcTx.getHash(),
+                    responseCode
+                );
+                logger.error("[refundPeginToDestinationWithoutCode] {}", message);
+                throw new IllegalStateException(message);
+            }
+        };
+
+        eventLogger.logRejectedPegin(btcTx, RejectedPeginReason.PEGIN_DESTINATION_HAS_NO_CODE);
+        settleRejectionReleaseBuildResult(btcTx, btcRefundScript, rskTxHash, totalAmount, buildResult);
+        if (!releaseBuilt) {
+            logger.debug(
+                "[refundPeginToDestinationWithoutCode] Nonrefundable tx {}. Reason {}",
+                btcTx.getHash(),
+                NonRefundablePeginReason.REFUND_RELEASE_NOT_BUILT
+            );
+            eventLogger.logNonRefundablePegin(btcTx, NonRefundablePeginReason.REFUND_RELEASE_NOT_BUILT);
+        }
         markTxAsProcessed(btcTx);
     }
 
@@ -565,6 +631,10 @@ public class BridgeSupport {
                 case LEGACY_PEGIN_UNDETERMINED_SENDER, PEGIN_V1_INVALID_PAYLOAD ->
                     protocolVersion == 1 ? NonRefundablePeginReason.PEGIN_V1_REFUND_ADDRESS_NOT_SET
                         : NonRefundablePeginReason.LEGACY_PEGIN_UNDETERMINED_SENDER;
+                case PEGIN_DESTINATION_HAS_NO_CODE -> NonRefundablePeginReason.OUTPUTS_SENT_TO_DIFFERENT_FEDS; // Only reason for a v3 peg-in to a destination without code not being refunded here is paying more than one live federation
+                case PEGIN_CAP_SURPASSED -> // parsed payload (v1/v2) rejected with no refund output and no sender-derived address
+                    protocolVersion >= 1 ? NonRefundablePeginReason.PEGIN_V1_REFUND_ADDRESS_NOT_SET
+                        : NonRefundablePeginReason.LEGACY_PEGIN_UNDETERMINED_SENDER;
                 default -> throw new IllegalStateException("Unexpected value: " + rejectedPeginReason);
             };
 
@@ -574,8 +644,11 @@ public class BridgeSupport {
         );
         eventLogger.logNonRefundablePegin(btcTx, nonRefundablePeginReason);
 
-        if (shouldMarkRejectedPeginAsProcessed()) {
-            // Between RSKIP459 and RSKIP551 rejected peg-ins should be marked as processed
+        // RSKIP YYY: a v3 peg-in rejected because its destination has no code is always marked as
+        // processed, so that its verdict is final; this takes precedence over RSKIP551.
+        if (rejectedPeginReason == RejectedPeginReason.PEGIN_DESTINATION_HAS_NO_CODE
+            || shouldMarkRejectedPeginAsProcessed()) {
+            // Otherwise, between RSKIP459 and RSKIP551 rejected peg-ins should be marked as processed
             markTxAsProcessed(btcTx);
         }
     }
@@ -3128,7 +3201,7 @@ public class BridgeSupport {
 
     private void generateRejectionReleaseWithWalletProvider(
         BtcTransaction btcTx,
-        Address btcRefundAddress,
+        Script btcRefundScript,
         Keccak256 rskTxHash,
         Coin totalAmount,
         WalletProvider walletProvider
@@ -3138,7 +3211,7 @@ public class BridgeSupport {
         Wallet wallet = walletProvider.provide(btcTx, emptyList);
 
         Federation federation = getFederationFromTxOutputs(btcTx);
-        generateRejectionReleaseFromFederation(btcTx, btcRefundAddress, federation, rskTxHash, totalAmount, wallet);
+        generateRejectionReleaseFromFederation(btcTx, btcRefundScript, federation, rskTxHash, totalAmount, wallet);
     }
 
     // Having to create a rejection release with outputs for both
@@ -3193,7 +3266,7 @@ public class BridgeSupport {
         Wallet wallet = walletProvider.provide(btcTx, spendingAddresses);
 
         Federation federation = getFlyoverFederationFromTxOutputs(flyoverDerivationHash, btcTx);
-        generateRejectionReleaseFromFederation(btcTx, btcRefundAddress, federation, rskTxHash, totalAmount, wallet);
+        generateRejectionReleaseFromFederation(btcTx, ScriptBuilder.createOutputScript(btcRefundAddress), federation, rskTxHash, totalAmount, wallet);
     }
 
     /**
@@ -3229,39 +3302,58 @@ public class BridgeSupport {
 
     private void generateRejectionReleaseFromFederation(
         BtcTransaction btcTx,
-        Address btcRefundAddress,
+        Script btcRefundScript,
         Federation federation,
         Keccak256 rskTxHash,
         Coin totalAmount,
         Wallet wallet
     ) throws IOException {
+        ReleaseTransactionBuilder.BuildResult buildReturnResult = buildRejectionReleaseFromFederation(btcRefundScript, federation, wallet);
+        settleRejectionReleaseBuildResult(btcTx, btcRefundScript, rskTxHash, totalAmount, buildReturnResult);
+    }
 
+    /// Builds the release only: nothing is logged as an event, queued or stored.
+    private ReleaseTransactionBuilder.BuildResult buildRejectionReleaseFromFederation(
+        Script btcRefundScript,
+        Federation federation,
+        Wallet wallet
+    ) {
         ReleaseTransactionBuilder txBuilder = new ReleaseTransactionBuilder(
             btcContext.getParams(),
             wallet,
             federation.getFormatVersion(),
-            btcRefundAddress,
+            federation.getAddress(), // never used: emptying the wallet produces no change output
             getFeePerKb(),
             activations
         );
 
-        ReleaseTransactionBuilder.BuildResult buildReturnResult = txBuilder.buildEmptyWalletTo(btcRefundAddress);
+        return txBuilder.buildEmptyWalletTo(btcRefundScript);
+    }
+
+    /// Queues the release and logs release_requested if it was built; otherwise only reports the failure.
+    private void settleRejectionReleaseBuildResult(
+        BtcTransaction btcTx,
+        Script btcRefundScript,
+        Keccak256 rskTxHash,
+        Coin totalAmount,
+        ReleaseTransactionBuilder.BuildResult buildReturnResult
+    ) throws IOException {
         if (buildReturnResult.responseCode() != ReleaseTransactionBuilder.Response.SUCCESS) {
             logger.warn(
                 "[generateRejectionReleaseFromFederation] Rejecting peg-in tx could not be built due to {}: Btc peg-in txHash {}. Refund to address: {}. RskTxHash: {}. Value: {}",
                 buildReturnResult.responseCode(),
                 btcTx.getHash(),
-                btcRefundAddress,
+                btcRefundScript,
                 rskTxHash,
                 totalAmount
             );
-            panicProcessor.panic("peg-in-refund", String.format("peg-in money return tx build for btc tx %s error. Return was to %s. Tx %s. Value %s. Reason %s", btcTx.getHash(), btcRefundAddress, rskTxHash, totalAmount, buildReturnResult.responseCode()));
+            panicProcessor.panic("peg-in-refund", String.format("peg-in money return tx build for btc tx %s error. Return was to %s. Tx %s. Value %s. Reason %s", btcTx.getHash(), btcRefundScript, rskTxHash, totalAmount, buildReturnResult.responseCode()));
             return;
         }
 
         logger.info(
             "[generateRejectionReleaseFromFederation] Rejecting peg-in tx built successfully: Refund to address: {}. RskTxHash: {}. Value {}.",
-            btcRefundAddress,
+            btcRefundScript,
             rskTxHash,
             totalAmount
         );
@@ -3283,30 +3375,49 @@ public class BridgeSupport {
         Keccak256 rskTxHash,
         Coin totalAmount
     ) throws IOException {
-        WalletProvider walletProvider = (BtcTransaction btcTransaction, List<Address> addresses) -> {
-            // Build the list of UTXOs in the BTC transaction sent to either the active
-            // or retiring federation
-            List<UTXO> utxosToUse = btcTx.getWalletOutputs(
-                getNoSpendWalletForLiveFederations(false)
-            )
-                .stream()
-                .map(output ->
-                    new UTXO(
-                        btcTx.getHash(),
-                        output.getIndex(),
-                        output.getValue(),
-                        0,
-                        btcTx.isCoinBase(),
-                        output.getScriptPubKey()
-                    )
-                )
-                .toList();
-            // Use the list of UTXOs to build a transaction builder
-            // for the return btc transaction generation
-            return getUTXOBasedWalletForLiveFederations(utxosToUse, false);
-        };
+        generateRejectionRelease(btcTx, ScriptBuilder.createOutputScript(senderBtcAddress), rskTxHash, totalAmount);
+    }
 
-        generateRejectionReleaseWithWalletProvider(btcTx, senderBtcAddress, rskTxHash, totalAmount, walletProvider);
+    private void generateRejectionRelease(
+        BtcTransaction btcTx,
+        Script btcRefundScript,
+        Keccak256 rskTxHash,
+        Coin totalAmount
+    ) throws IOException {
+        WalletProvider walletProvider = (BtcTransaction btcTransaction, List<Address> addresses) ->
+            getWalletWithPeginUtxosForLiveFederations(btcTx);
+
+        generateRejectionReleaseWithWalletProvider(btcTx, btcRefundScript, rskTxHash, totalAmount, walletProvider);
+    }
+
+    /// The release {@link #generateRejectionRelease(BtcTransaction, Script, Keccak256, Coin)} would build, not settled.
+    private ReleaseTransactionBuilder.BuildResult buildRejectionRelease(BtcTransaction btcTx, Script btcRefundScript) {
+        Wallet wallet = getWalletWithPeginUtxosForLiveFederations(btcTx);
+        Federation federation = getFederationFromTxOutputs(btcTx);
+        return buildRejectionReleaseFromFederation(btcRefundScript, federation, wallet);
+    }
+
+    private Wallet getWalletWithPeginUtxosForLiveFederations(BtcTransaction btcTx) {
+        // Build the list of UTXOs in the BTC transaction sent to either the active
+        // or retiring federation
+        List<UTXO> utxosToUse = btcTx.getWalletOutputs(
+            getNoSpendWalletForLiveFederations(false)
+        )
+            .stream()
+            .map(output ->
+                new UTXO(
+                    btcTx.getHash(),
+                    output.getIndex(),
+                    output.getValue(),
+                    0,
+                    btcTx.isCoinBase(),
+                    output.getScriptPubKey()
+                )
+            )
+            .toList();
+        // Use the list of UTXOs to build a transaction builder
+        // for the return btc transaction generation
+        return getUTXOBasedWalletForLiveFederations(utxosToUse, false);
     }
 
     private boolean verifyLockDoesNotSurpassLockingCap(BtcTransaction btcTx, Coin totalAmount) {

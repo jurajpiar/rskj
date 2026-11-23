@@ -158,6 +158,8 @@ class ActivationConfigTest {
         "    rskip551: vetiver900",
         "    rskip552: vetiver900",
         "    rskip559: tbd1000",
+        "    rskipPeginInstructionsV2: tbd1000",
+        "    rskipPeginInstructionsV3: tbd1000",
         "}"
     ));
 

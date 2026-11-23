@@ -117,6 +117,8 @@ public enum ConsensusRule {
     RSKIP551("rskip551"), // Disable RSKIP459
     RSKIP552("rskip552"), // Blake2F improvements in data handling
     RSKIP559("rskip559"), // Pegouts deterministic sorting
+    RSKIP_PEGIN_INSTRUCTIONS_V2("rskipPeginInstructionsV2"), // PoC: peg-in instructions version 2 (native segwit and taproot refund outputs). RSKIP number TBD
+    RSKIP_PEGIN_INSTRUCTIONS_V3("rskipPeginInstructionsV3"), // PoC: peg-in instructions version 3, conditional credit (REQUIRE_CODE) else refund. RSKIP number TBD
     ;
 
     private final String configKey;

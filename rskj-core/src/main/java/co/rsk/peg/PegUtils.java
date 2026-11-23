@@ -1,5 +1,6 @@
 package co.rsk.peg;
 
+import java.util.function.Predicate;
 import static co.rsk.peg.bitcoin.BitcoinUtils.getMultiSigTransactionHashWithoutSignatures;
 import static co.rsk.peg.bitcoin.BitcoinUtilsLegacy.getMultiSigTransactionHashWithoutSignaturesBeforeRSKIP305;
 import static co.rsk.peg.pegin.RejectedPeginReason.*;
@@ -17,8 +18,10 @@ import co.rsk.peg.btcLockSender.BtcLockSender.TxSenderAddressType;
 import co.rsk.peg.federation.*;
 import co.rsk.peg.federation.constants.FederationConstants;
 import co.rsk.peg.pegin.PeginEvaluationResult;
+import co.rsk.peg.pegin.RejectedPeginReason;
 import co.rsk.peg.pegin.PeginProcessAction;
 import co.rsk.peg.pegininstructions.PeginInstructionsException;
+import co.rsk.peg.pegininstructions.PeginInstructionsVersion3;
 import java.util.*;
 import org.ethereum.config.blockchain.upgrades.ActivationConfig;
 import org.ethereum.config.blockchain.upgrades.ConsensusRule;
@@ -197,12 +200,37 @@ public class PegUtils {
             .orElse(false);
     }
 
+    /**
+     * PoC test-only seam. No rule yet rejects a parsed version-1/2 payload with a refund, so a conformance
+     * harness needs a way to reach the refundable-rejection decision after parsing and minimum validation.
+     * Production code never sets this; it must be removed or replaced by a real rejection rule before adoption.
+     */
+    static volatile Optional<RejectedPeginReason> testOnlyInjectedRefundableRejection = Optional.empty();
+
     static PeginEvaluationResult evaluatePegin(
         BtcTransaction btcTx,
         PeginInformation peginInformation,
         Coin minimumPeginTxValue,
         Wallet fedWallet,
         ActivationConfig.ForBlock activations
+    ) {
+        // Callers that predate version 3 never see a REQUIRE_CODE payload; a lookup here is a programming error.
+        return evaluatePegin(btcTx, peginInformation, minimumPeginTxValue, fedWallet, activations, address -> {
+            throw new IllegalStateException("destination code lookup required but not provided");
+        });
+    }
+
+    /**
+     * @param destinationHasCode whether an RSK address holds code in the state of the registering block
+     *                           (peg-in instructions v3, REQUIRE_CODE)
+     */
+    static PeginEvaluationResult evaluatePegin(
+        BtcTransaction btcTx,
+        PeginInformation peginInformation,
+        Coin minimumPeginTxValue,
+        Wallet fedWallet,
+        ActivationConfig.ForBlock activations,
+        Predicate<RskAddress> destinationHasCode
     ) {
         if (!activations.isActive(ConsensusRule.RSKIP379)) {
             throw new IllegalStateException("Can't call this method before RSKIP379 activation");
@@ -221,9 +249,9 @@ public class PegUtils {
                 e.getMessage()
             );
 
-            boolean hasRefundAddress = peginInformation.getBtcRefundAddress() != null;
+            boolean hasRefundScript = peginInformation.getBtcRefundScript() != null;
 
-            PeginProcessAction peginProcessAction = hasRefundAddress ?
+            PeginProcessAction peginProcessAction = hasRefundScript ?
                 PeginProcessAction.REFUND :
                 PeginProcessAction.NO_REFUND;
 
@@ -234,14 +262,65 @@ public class PegUtils {
         switch (protocolVersion) {
             case 0:
                 return evaluateLegacyPegin(btcTx, fedWallet, peginInformation.getSenderBtcAddressType());
-            case 1:
+            case 1, 2:
+                Optional<RejectedPeginReason> injectedRejection = testOnlyInjectedRefundableRejection;
+                if (injectedRejection.isPresent()) {
+                    // Refund destination order (draft): payload refund output, else sender-derived, else non-refundable.
+                    // Both of the first two are already folded into getBtcRefundScript() by PeginInformation.
+                    PeginProcessAction action = peginInformation.getBtcRefundScript() != null
+                        ? PeginProcessAction.REFUND
+                        : PeginProcessAction.NO_REFUND;
+                    return new PeginEvaluationResult(action, injectedRejection.get());
+                }
                 return new PeginEvaluationResult(PeginProcessAction.REGISTER);
+            case PeginInstructionsVersion3.PROTOCOL_VERSION:
+                return evaluatePeginVersion3(btcTx, fedWallet, peginInformation, destinationHasCode);
             default:
                 // This flow should never be reached.
                 String message = String.format("Invalid state. Unexpected pegin protocol %d", protocolVersion);
                 logger.error("[evaluatePegin] {}", message);
                 throw new IllegalStateException(message);
         }
+    }
+
+    private static PeginEvaluationResult evaluatePeginVersion3(
+        BtcTransaction btcTx,
+        Wallet fedWallet,
+        PeginInformation peginInformation,
+        Predicate<RskAddress> destinationHasCode
+    ) {
+        if (!peginInformation.requiresCodeAtDestination()) {
+            return new PeginEvaluationResult(PeginProcessAction.REGISTER);
+        }
+        RskAddress destination = peginInformation.getRskDestinationAddress();
+        if (destinationHasCode.test(destination)) {
+            logger.debug("[evaluatePeginVersion3] Destination {} has code, registering", destination);
+            return new PeginEvaluationResult(PeginProcessAction.REGISTER);
+        }
+        if (hasOutputsToMoreThanOneLiveFederation(btcTx, fedWallet)) {
+            // A rejection release spending outputs of both live federations is not reliably signable
+            // (it completes and is valid only for some memberships, formats and signing orders),
+            // so it is not built: the deposit is unrefundable
+            logger.debug("[evaluatePeginVersion3] Destination {} has no code and the deposit pays more than one live federation, no refund", destination);
+            return new PeginEvaluationResult(PeginProcessAction.NO_REFUND, PEGIN_DESTINATION_HAS_NO_CODE);
+        }
+        // The refund output is mandatory with REQUIRE_CODE (enforced at parse time), so there is always a refund script
+        logger.debug("[evaluatePeginVersion3] Destination {} has no code, refunding", destination);
+        return new PeginEvaluationResult(PeginProcessAction.REFUND, PEGIN_DESTINATION_HAS_NO_CODE);
+    }
+
+    /**
+     * Whether the deposit's outputs pay more than one live federation (active and retiring),
+     * whatever their script formats. Wider than {@link #hasOutputsToDifferentTypesOfFeds}.
+     */
+    private static boolean hasOutputsToMoreThanOneLiveFederation(BtcTransaction btcTx, Wallet fedWallet) {
+        Set<Federation> destinationFeds = new HashSet<>();
+        for (TransactionOutput output : btcTx.getWalletOutputs(fedWallet)) {
+            byte[] outputP2shScript = output.getScriptPubKey().getPubKeyHash();
+            Optional<Federation> destinationFed = ((BridgeBtcWallet) fedWallet).getDestinationFederation(outputP2shScript);
+            destinationFed.ifPresent(destinationFeds::add);
+        }
+        return destinationFeds.size() > 1;
     }
 
     private static PeginEvaluationResult evaluateLegacyPegin(BtcTransaction btcTx, Wallet fedWallet, TxSenderAddressType senderAddressType)  {

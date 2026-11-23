@@ -16,6 +16,7 @@ import co.rsk.peg.constants.BridgeMainNetConstants;
 import co.rsk.peg.bitcoin.BitcoinTestUtils;
 import co.rsk.peg.btcLockSender.BtcLockSender;
 import co.rsk.peg.federation.Federation;
+import co.rsk.peg.federation.P2shP2wshErpFederationBuilder;
 import co.rsk.peg.pegin.PeginEvaluationResult;
 import co.rsk.peg.pegin.PeginProcessAction;
 import co.rsk.peg.pegin.RejectedPeginReason;
@@ -140,6 +141,7 @@ class PegUtilsEvaluatePeginTest {
         Address btcRefundAddress = BitcoinTestUtils.createP2PKHAddress(networkParameters, "test");;
         PeginInformation peginInformation = mock(PeginInformation.class);
         when(peginInformation.getBtcRefundAddress()).thenReturn(btcRefundAddress);
+        when(peginInformation.getBtcRefundScript()).thenReturn(co.rsk.bitcoinj.script.ScriptBuilder.createOutputScript(btcRefundAddress));
 
         when(peginInformation.getProtocolVersion()).thenReturn(protocolVersion);
 
@@ -281,5 +283,141 @@ class PegUtilsEvaluatePeginTest {
         );
 
         assertEquals(PeginProcessAction.REGISTER, peginEvaluationResult.getPeginProcessAction());
+    }
+
+    // --- Peg-in instructions v3 PoC: REQUIRE_CODE evaluation ---
+
+    private PeginInformation peginInformationV3(boolean requiresCode) throws PeginInstructionsException {
+        PeginInformation peginInformation = mock(PeginInformation.class);
+        when(peginInformation.getProtocolVersion()).thenReturn(3);
+        when(peginInformation.requiresCodeAtDestination()).thenReturn(requiresCode);
+        when(peginInformation.getRskDestinationAddress()).thenReturn(new co.rsk.core.RskAddress(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}));
+        co.rsk.bitcoinj.core.Address refundAddress = BitcoinTestUtils.createP2PKHAddress(networkParameters, "v3refund");
+        when(peginInformation.getBtcRefundAddress()).thenReturn(refundAddress);
+        when(peginInformation.getBtcRefundScript()).thenReturn(ScriptBuilder.createOutputScript(refundAddress));
+        return peginInformation;
+    }
+
+    private BtcTransaction validPeginTx() {
+        BtcTransaction btcTx = new BtcTransaction(networkParameters);
+        btcTx.addOutput(minimumPegInTxValue, activeFederation.getAddress());
+        return btcTx;
+    }
+
+    @Test
+    void evaluatePegin_v3_flagClear_registers_withoutCodeLookup() throws PeginInstructionsException {
+        PeginEvaluationResult result = PegUtils.evaluatePegin(validPeginTx(), peginInformationV3(false), minimumPegInTxValue, activeFedWallet, activations,
+            address -> { throw new AssertionError("code must not be looked up when the flag is clear"); });
+
+        assertEquals(PeginProcessAction.REGISTER, result.getPeginProcessAction());
+        assertTrue(result.getRejectedPeginReason().isEmpty());
+    }
+
+    @Test
+    void evaluatePegin_v3_requireCode_destinationHasCode_registers() throws PeginInstructionsException {
+        PeginEvaluationResult result = PegUtils.evaluatePegin(validPeginTx(), peginInformationV3(true), minimumPegInTxValue, activeFedWallet, activations, address -> true);
+
+        assertEquals(PeginProcessAction.REGISTER, result.getPeginProcessAction());
+    }
+
+    @Test
+    void evaluatePegin_v3_requireCode_destinationHasNoCode_refunds() throws PeginInstructionsException {
+        PeginEvaluationResult result = PegUtils.evaluatePegin(validPeginTx(), peginInformationV3(true), minimumPegInTxValue, activeFedWallet, activations, address -> false);
+
+        assertEquals(PeginProcessAction.REFUND, result.getPeginProcessAction());
+        assertEquals(RejectedPeginReason.PEGIN_DESTINATION_HAS_NO_CODE, result.getRejectedPeginReason().orElseThrow());
+    }
+
+    @Test
+    void evaluatePegin_v3_requireCode_belowMinimum_isInvalidAmount_beforeCodeCheck() throws PeginInstructionsException {
+        BtcTransaction btcTx = new BtcTransaction(networkParameters);
+        btcTx.addOutput(minimumPegInTxValue.subtract(Coin.SATOSHI), activeFederation.getAddress());
+
+        PeginEvaluationResult result = PegUtils.evaluatePegin(btcTx, peginInformationV3(true), minimumPegInTxValue, activeFedWallet, activations,
+            address -> { throw new AssertionError("minimum check precedes the code check"); });
+
+        assertEquals(PeginProcessAction.NO_REFUND, result.getPeginProcessAction());
+        assertEquals(RejectedPeginReason.INVALID_AMOUNT, result.getRejectedPeginReason().orElseThrow());
+    }
+
+    @Test
+    void evaluatePegin_v3_requireCode_twoOutputsToOneFederation_destinationHasNoCode_refunds() throws PeginInstructionsException {
+        BtcTransaction btcTx = validPeginTx();
+        btcTx.addOutput(minimumPegInTxValue, activeFederation.getAddress());
+
+        PeginEvaluationResult result = PegUtils.evaluatePegin(btcTx, peginInformationV3(true), minimumPegInTxValue, activeFedWallet, activations, address -> false);
+
+        assertEquals(PeginProcessAction.REFUND, result.getPeginProcessAction());
+        assertEquals(RejectedPeginReason.PEGIN_DESTINATION_HAS_NO_CODE, result.getRejectedPeginReason().orElseThrow());
+    }
+
+    // --- A deposit paying more than one live federation (active and retiring) ---
+
+    private static Stream<Arguments> retiringFederations() {
+        List<BtcECKey> retiringFedSigners = BitcoinTestUtils.getBtcEcKeysFromSeeds(
+            new String[]{"fb01", "fb02", "fb03", "fb04", "fb05"}, true
+        );
+        return Stream.of(
+            Arguments.of("same script format", createP2shErpFederation(bridgeMainnetConstants.getFederationConstants(), retiringFedSigners)),
+            Arguments.of("different script format", P2shP2wshErpFederationBuilder.builder().build())
+        );
+    }
+
+    private BtcTransaction peginTxToBothFederations(Federation retiringFederation) {
+        BtcTransaction btcTx = validPeginTx();
+        btcTx.addOutput(minimumPegInTxValue, retiringFederation.getAddress());
+        btcTx.addOutput(Coin.ZERO, ScriptBuilder.createOpReturnScript(new byte[]{0x52, 0x53, 0x4b, 0x54, 0x03}));
+        return btcTx;
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("retiringFederations")
+    void evaluatePegin_v3_requireCode_outputsToBothLiveFederations_destinationHasNoCode_isNotRefunded(String name, Federation retiringFederation) throws PeginInstructionsException {
+        Wallet liveFedsWallet = new BridgeBtcWallet(context, List.of(activeFederation, retiringFederation));
+
+        PeginEvaluationResult result = PegUtils.evaluatePegin(peginTxToBothFederations(retiringFederation), peginInformationV3(true), minimumPegInTxValue, liveFedsWallet, activations, address -> false);
+
+        assertEquals(PeginProcessAction.NO_REFUND, result.getPeginProcessAction());
+        assertEquals(RejectedPeginReason.PEGIN_DESTINATION_HAS_NO_CODE, result.getRejectedPeginReason().orElseThrow());
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("retiringFederations")
+    void evaluatePegin_v3_requireCode_outputsToBothLiveFederations_destinationHasCode_registers(String name, Federation retiringFederation) throws PeginInstructionsException {
+        Wallet liveFedsWallet = new BridgeBtcWallet(context, List.of(activeFederation, retiringFederation));
+
+        PeginEvaluationResult result = PegUtils.evaluatePegin(peginTxToBothFederations(retiringFederation), peginInformationV3(true), minimumPegInTxValue, liveFedsWallet, activations, address -> true);
+
+        assertEquals(PeginProcessAction.REGISTER, result.getPeginProcessAction());
+        assertTrue(result.getRejectedPeginReason().isEmpty());
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("retiringFederations")
+    void evaluatePegin_v3_flagClear_outputsToBothLiveFederations_registers(String name, Federation retiringFederation) throws PeginInstructionsException {
+        Wallet liveFedsWallet = new BridgeBtcWallet(context, List.of(activeFederation, retiringFederation));
+
+        PeginEvaluationResult result = PegUtils.evaluatePegin(peginTxToBothFederations(retiringFederation), peginInformationV3(false), minimumPegInTxValue, liveFedsWallet, activations,
+            address -> { throw new AssertionError("code must not be looked up when the flag is clear"); });
+
+        assertEquals(PeginProcessAction.REGISTER, result.getPeginProcessAction());
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("retiringFederations")
+    void evaluatePegin_v3_requireCode_retiringFederationLiveButNotPaid_destinationHasNoCode_refunds(String name, Federation retiringFederation) throws PeginInstructionsException {
+        Wallet liveFedsWallet = new BridgeBtcWallet(context, List.of(activeFederation, retiringFederation));
+
+        PeginEvaluationResult result = PegUtils.evaluatePegin(validPeginTx(), peginInformationV3(true), minimumPegInTxValue, liveFedsWallet, activations, address -> false);
+
+        assertEquals(PeginProcessAction.REFUND, result.getPeginProcessAction());
+        assertEquals(RejectedPeginReason.PEGIN_DESTINATION_HAS_NO_CODE, result.getRejectedPeginReason().orElseThrow());
+    }
+
+    @Test
+    void evaluatePegin_legacySignature_throwsIfCodeLookupNeeded() throws PeginInstructionsException {
+        PeginInformation peginInformation = peginInformationV3(true);
+        BtcTransaction btcTx = validPeginTx();
+        assertThrows(IllegalStateException.class, () -> PegUtils.evaluatePegin(btcTx, peginInformation, minimumPegInTxValue, activeFedWallet, activations));
     }
 }

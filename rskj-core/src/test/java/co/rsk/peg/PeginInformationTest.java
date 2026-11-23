@@ -18,6 +18,9 @@ import co.rsk.peg.btcLockSender.P2pkhBtcLockSender;
 import co.rsk.peg.pegininstructions.PeginInstructionsException;
 import co.rsk.peg.pegininstructions.PeginInstructionsProvider;
 import co.rsk.peg.pegininstructions.PeginInstructionsVersion1;
+import co.rsk.peg.pegininstructions.PeginInstructionsVersion2;
+import co.rsk.peg.pegininstructions.PeginInstructionsVersion3;
+import co.rsk.peg.pegininstructions.PeginInstructions;
 import java.util.Optional;
 import java.util.stream.Stream;
 
@@ -479,5 +482,180 @@ class PeginInformationTest {
                 Assertions.assertNull(peginInformation.getRskDestinationAddress());
             });
         }
+    }
+
+    // --- Peg-in instructions v2 and v3 PoC ---
+
+    private PeginInformation parseV2(BtcTransaction btcTx, PeginInstructionsVersion2 peginInstructionsMock, boolean v2Active) throws PeginInstructionsException {
+        return parseVersioned(btcTx, peginInstructionsMock, v2Active, true);
+    }
+
+    private PeginInformation parseV3(BtcTransaction btcTx, PeginInstructionsVersion3 peginInstructionsMock, boolean v3Active) throws PeginInstructionsException {
+        return parseVersioned(btcTx, peginInstructionsMock, true, v3Active);
+    }
+
+    private PeginInformation parseVersioned(BtcTransaction btcTx, PeginInstructions peginInstructionsMock, boolean v2Active, boolean v3Active) throws PeginInstructionsException {
+        BtcECKey senderKey = new BtcECKey();
+        BtcLockSender btcLockSenderMock = mock(P2pkhBtcLockSender.class);
+        when(btcLockSenderMock.getRskAddress()).thenReturn(new RskAddress(ECKey.fromPublicOnly(senderKey.getPubKey()).getAddress()));
+        when(btcLockSenderMock.getBTCAddress()).thenReturn(senderKey.toAddress(networkParameters));
+        when(btcLockSenderMock.getTxSenderAddressType()).thenReturn(TxSenderAddressType.P2PKH);
+        BtcLockSenderProvider btcLockSenderProviderMock = mock(BtcLockSenderProvider.class);
+        when(btcLockSenderProviderMock.tryGetBtcLockSender(btcTx)).thenReturn(Optional.of(btcLockSenderMock));
+
+        PeginInstructionsProvider peginInstructionsProviderMock = mock(PeginInstructionsProvider.class);
+        when(peginInstructionsProviderMock.buildPeginInstructions(btcTx)).thenReturn(Optional.of(peginInstructionsMock));
+
+        ActivationConfig.ForBlock activationsMock = mock(ActivationConfig.ForBlock.class);
+        when(activationsMock.isActive(ConsensusRule.RSKIP170)).thenReturn(true);
+        when(activationsMock.isActive(ConsensusRule.RSKIP379)).thenReturn(true);
+        when(activationsMock.isActive(ConsensusRule.RSKIP_PEGIN_INSTRUCTIONS_V2)).thenReturn(v2Active);
+        when(activationsMock.isActive(ConsensusRule.RSKIP_PEGIN_INSTRUCTIONS_V3)).thenReturn(v3Active);
+
+        PeginInformation peginInformation = new PeginInformation(btcLockSenderProviderMock, peginInstructionsProviderMock, activationsMock);
+        peginInformation.parse(btcTx);
+        return peginInformation;
+    }
+
+    @Test
+    void parse_fromPeginInstructionsV3_requireCode_setsFlagAndRefundAddress() throws PeginInstructionsException {
+        BtcTransaction btcTx = new BtcTransaction(networkParameters);
+        RskAddress destination = new RskAddress(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20});
+        Address refund = new BtcECKey().toAddress(networkParameters);
+        PeginInstructionsVersion3 v3Mock = mock(PeginInstructionsVersion3.class);
+        when(v3Mock.getProtocolVersion()).thenReturn(3);
+        when(v3Mock.getRskDestinationAddress()).thenReturn(destination);
+        when(v3Mock.requiresCode()).thenReturn(true);
+        when(v3Mock.getBtcRefundScript()).thenReturn(Optional.of(co.rsk.bitcoinj.script.ScriptBuilder.createOutputScript(refund)));
+        when(v3Mock.getBtcRefundAddress()).thenReturn(Optional.of(refund));
+
+        PeginInformation peginInformation = parseV3(btcTx, v3Mock, true);
+
+        Assertions.assertEquals(3, peginInformation.getProtocolVersion());
+        Assertions.assertEquals(destination, peginInformation.getRskDestinationAddress());
+        Assertions.assertTrue(peginInformation.requiresCodeAtDestination());
+        Assertions.assertEquals(refund, peginInformation.getBtcRefundAddress(), "payload refund overrides the sender-derived one");
+        Assertions.assertEquals(co.rsk.bitcoinj.script.ScriptBuilder.createOutputScript(refund), peginInformation.getBtcRefundScript());
+        Assertions.assertNotEquals(peginInformation.getSenderBtcAddress(), peginInformation.getBtcRefundAddress());
+    }
+
+    @Test
+    void parse_fromPeginInstructionsV3_requireCode_taprootRefund_setsScriptButNoAddress() throws PeginInstructionsException {
+        BtcTransaction btcTx = new BtcTransaction(networkParameters);
+        byte[] program = new byte[32];
+        java.util.Arrays.fill(program, (byte) 0x55);
+        co.rsk.bitcoinj.script.Script p2trScript = co.rsk.peg.pegininstructions.PeginRefundScriptType.P2TR.buildOutputScript(program);
+        PeginInstructionsVersion3 v3Mock = mock(PeginInstructionsVersion3.class);
+        when(v3Mock.getProtocolVersion()).thenReturn(3);
+        when(v3Mock.getRskDestinationAddress()).thenReturn(new RskAddress(new byte[20]));
+        when(v3Mock.requiresCode()).thenReturn(true);
+        when(v3Mock.getBtcRefundScript()).thenReturn(Optional.of(p2trScript));
+        when(v3Mock.getBtcRefundAddress()).thenReturn(Optional.empty());
+
+        PeginInformation peginInformation = parseV3(btcTx, v3Mock, true);
+
+        Assertions.assertTrue(peginInformation.requiresCodeAtDestination());
+        Assertions.assertEquals(p2trScript, peginInformation.getBtcRefundScript());
+        Assertions.assertNull(peginInformation.getBtcRefundAddress(), "a taproot refund has no Address form");
+    }
+
+    @Test
+    void parse_fromPeginInstructionsV3_flagClear_noRefund_keepsSenderDerivedRefund() throws PeginInstructionsException {
+        BtcTransaction btcTx = new BtcTransaction(networkParameters);
+        PeginInstructionsVersion3 v3Mock = mock(PeginInstructionsVersion3.class);
+        when(v3Mock.getProtocolVersion()).thenReturn(3);
+        when(v3Mock.getRskDestinationAddress()).thenReturn(new RskAddress(new byte[20]));
+        when(v3Mock.requiresCode()).thenReturn(false);
+        when(v3Mock.getBtcRefundScript()).thenReturn(Optional.empty());
+
+        PeginInformation peginInformation = parseV3(btcTx, v3Mock, true);
+
+        Assertions.assertFalse(peginInformation.requiresCodeAtDestination());
+        Assertions.assertEquals(peginInformation.getSenderBtcAddress(), peginInformation.getBtcRefundAddress());
+    }
+
+    @Test
+    void parse_fromPeginInstructionsV3_beforeActivation_isInvalidProtocolVersion() {
+        BtcTransaction btcTx = new BtcTransaction(networkParameters);
+        PeginInstructionsVersion3 v3Mock = mock(PeginInstructionsVersion3.class);
+        when(v3Mock.getProtocolVersion()).thenReturn(3);
+
+        Assertions.assertThrows(PeginInstructionsException.class, () -> parseV3(btcTx, v3Mock, false));
+    }
+
+    @Test
+    void parse_fromPeginInstructionsV2_witnessRefund_setsScriptButNoAddress() throws PeginInstructionsException {
+        // Arrange
+        BtcTransaction btcTx = new BtcTransaction(networkParameters);
+        RskAddress destination = new RskAddress(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20});
+        byte[] program = new byte[32];
+        java.util.Arrays.fill(program, (byte) 0x55);
+        co.rsk.bitcoinj.script.Script p2trScript = co.rsk.peg.pegininstructions.PeginRefundScriptType.P2TR.buildOutputScript(program);
+
+        PeginInstructionsVersion2 v2Mock = mock(PeginInstructionsVersion2.class);
+        when(v2Mock.getProtocolVersion()).thenReturn(2);
+        when(v2Mock.getRskDestinationAddress()).thenReturn(destination);
+        when(v2Mock.getBtcRefundScript()).thenReturn(Optional.of(p2trScript));
+        when(v2Mock.getBtcRefundAddress()).thenReturn(Optional.empty());
+
+        // Act
+        PeginInformation peginInformation = parseV2(btcTx, v2Mock, true);
+
+        // Assert
+        Assertions.assertEquals(2, peginInformation.getProtocolVersion());
+        Assertions.assertEquals(destination, peginInformation.getRskDestinationAddress());
+        Assertions.assertEquals(p2trScript, peginInformation.getBtcRefundScript());
+        Assertions.assertNull(peginInformation.getBtcRefundAddress(), "a taproot refund has no Address form");
+        Assertions.assertNotNull(peginInformation.getSenderBtcAddress());
+    }
+
+    @Test
+    void parse_fromPeginInstructionsV2_noRefund_keepsSenderDerivedRefund() throws PeginInstructionsException {
+        BtcTransaction btcTx = new BtcTransaction(networkParameters);
+        PeginInstructionsVersion2 v2Mock = mock(PeginInstructionsVersion2.class);
+        when(v2Mock.getProtocolVersion()).thenReturn(2);
+        when(v2Mock.getRskDestinationAddress()).thenReturn(new RskAddress(new byte[20]));
+        when(v2Mock.getBtcRefundScript()).thenReturn(Optional.empty());
+
+        PeginInformation peginInformation = parseV2(btcTx, v2Mock, true);
+
+        Assertions.assertEquals(2, peginInformation.getProtocolVersion());
+        Assertions.assertEquals(peginInformation.getSenderBtcAddress(), peginInformation.getBtcRefundAddress());
+        Assertions.assertEquals(
+            co.rsk.bitcoinj.script.ScriptBuilder.createOutputScript(peginInformation.getSenderBtcAddress()),
+            peginInformation.getBtcRefundScript()
+        );
+    }
+
+    @Test
+    void parse_fromPeginInstructionsV2_beforeActivation_isInvalidProtocolVersion() {
+        BtcTransaction btcTx = new BtcTransaction(networkParameters);
+        PeginInstructionsVersion2 v2Mock = mock(PeginInstructionsVersion2.class);
+        when(v2Mock.getProtocolVersion()).thenReturn(2);
+        when(v2Mock.getRskDestinationAddress()).thenReturn(new RskAddress(new byte[20]));
+
+        Assertions.assertThrows(PeginInstructionsException.class, () -> parseV2(btcTx, v2Mock, false));
+    }
+
+    @Test
+    void parse_fromPeginInstructionsV1_alsoExposesRefundScript() throws PeginInstructionsException {
+        BtcTransaction btcTx = new BtcTransaction(networkParameters);
+        Address refund = new BtcECKey().toAddress(networkParameters);
+        PeginInstructionsVersion1 v1Mock = mock(PeginInstructionsVersion1.class);
+        when(v1Mock.getProtocolVersion()).thenReturn(1);
+        when(v1Mock.getRskDestinationAddress()).thenReturn(new RskAddress(new byte[20]));
+        when(v1Mock.getBtcRefundAddress()).thenReturn(Optional.of(refund));
+
+        PeginInstructionsProvider providerMock = mock(PeginInstructionsProvider.class);
+        when(providerMock.buildPeginInstructions(btcTx)).thenReturn(Optional.of(v1Mock));
+        BtcLockSenderProvider lockSenderProviderMock = mock(BtcLockSenderProvider.class);
+        when(lockSenderProviderMock.tryGetBtcLockSender(btcTx)).thenReturn(Optional.empty());
+
+        PeginInformation peginInformation = new PeginInformation(lockSenderProviderMock, providerMock, arrowhead600Activations);
+        peginInformation.parse(btcTx);
+
+        Assertions.assertEquals(refund, peginInformation.getBtcRefundAddress());
+        Assertions.assertEquals(co.rsk.bitcoinj.script.ScriptBuilder.createOutputScript(refund), peginInformation.getBtcRefundScript());
+        Assertions.assertFalse(peginInformation.requiresCodeAtDestination());
     }
 }
